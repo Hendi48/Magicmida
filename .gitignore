@@ -1,0 +1,6 @@
+*.exe
+*.dll
+*.local
+*.identcache
+Win32/
+__history/
