@@ -95,7 +95,7 @@
 			<VerInfo_IncludeVerInfo>true</VerInfo_IncludeVerInfo>
 			<Icon_MainIcon>tree_2.ico</Icon_MainIcon>
 			<VerInfo_Locale>1033</VerInfo_Locale>
-			<Manifest_File>$(BDS)\bin\default_app.manifest</Manifest_File>
+			<Manifest_File>Magicmida.exe.manifest</Manifest_File>
 		</PropertyGroup>
 		<ItemGroup>
 			<DelphiCompile Include="$(MainSource)">
