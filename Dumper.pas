@@ -32,6 +32,7 @@ type
     procedure CollectNTFwd; overload;
     procedure CollectForwards(Fwds: TForwardDict; hModReal, hModScan: HMODULE); overload;
     procedure GatherModuleExportsFromRemoteProcess(M: PRemoteModule);
+    function GetLocalProcAddr(hModule: HMODULE; ProcName: PAnsiChar): Pointer;
     function RPM(Address: NativeUInt; Buf: Pointer; BufSize: NativeUInt): Boolean;
   public
     constructor Create(const AProcess: TProcessInformation; AImageBase, AOEP, AIAT: UIntPtr);
@@ -56,8 +57,6 @@ begin
 
   if FIAT > $70000000 then
     raise Exception.Create('Wrong IAT address');
-
-  //allocconsole;
 
   if Win32MajorVersion > 5 then
   begin
@@ -104,6 +103,7 @@ var
   a: PCardinal;
   Fwd: PAnsiChar;
   hMod: HMODULE;
+  ProcAddr: Pointer;
 begin
   if hModScan = 0 then
     hModScan := hModReal;
@@ -115,13 +115,15 @@ begin
   begin
     Fwd := PAnsiChar(ModScan + a^); // e.g. NTDLL.RtlAllocateHeap
     Posi := Pos(AnsiString('.'), Fwd);
-    if (Length(Fwd) in [10..60]) and (((Posi > 0) and (Posi < 15)) or (Pos(AnsiString('api-ms-win'), Fwd) > 0)) and (Pos(AnsiString('.#'), Fwd) = 0) then
+    if (Length(Fwd) in [10..90]) and (((Posi > 0) and (Posi < 15)) or (Pos(AnsiString('api-ms-win'), Fwd) > 0)) and (Pos(AnsiString('.#'), Fwd) = 0) then
     begin
       hMod := GetModuleHandleA(PAnsiChar(Copy(Fwd, 1, Posi - 1)));
       if hMod > 0 then
       begin
-        Fwds.AddOrSetValue(GetProcAddress(hMod, PAnsiChar(Copy(Fwd, Posi + 1, 50))), PByte(hModReal) + a^);
-        //Log(ltInfo, Format('%s @ %p', [PAnsiChar(Copy(Fwd, Posi + 1, 50)), GetProcAddress(hMod, PAnsiChar(Copy(Fwd, Posi + 1, 50)))]));
+        // Not using the normal GetProcAddress because it can return apphelp hooks (e.g., CoCreateInstance when running as admin)
+        ProcAddr := GetLocalProcAddr(hMod, PAnsiChar(Copy(Fwd, Posi + 1, 50)));
+        Fwds.AddOrSetValue(ProcAddr, PByte(hModReal) + a^);
+        //Log(ltInfo, Format('%s @ %p', [PAnsiChar(Copy(Fwd, Posi + 1, 50)), ProcAddr]));
       end;
     end;
     Inc(a);
@@ -178,7 +180,6 @@ var
   Section, Strs, RangeChecker: PByte;
   Descriptors: PImageImportDescriptor;
   ImportSect: PPESection;
-  NotZero: Boolean;
 begin
   // Read header from memory
   GetMem(Section, $1000);
@@ -225,7 +226,7 @@ begin
   repeat
     if ME.hModule <> FImageBase then
     begin
-      //Writeln(IntToHex(ME.hModule, 8), ' : ', ME.modBaseSize, ' : ', string(ME.szModule));
+      //Log(ltInfo, IntToHex(ME.hModule, 8) + ' : ' + IntToHex(ME.modBaseSize, 4) + ' : ' + string(ME.szModule));
       New(RM);
       RM.Base := ME.modBaseAddr;
       RM.EndOff := ME.modBaseAddr + ME.modBaseSize;
@@ -249,11 +250,11 @@ begin
     end
     else
     begin
-      // Some kernel32-function are forwarded to ntdll - restore the original address
+      // Some kernel32 functions are forwarded to ntdll - restore the original address
       if FForwards.TryGetValue(a^, Fwd) then
         a^ := Fwd
-      ;//else if FForwardsOle32.TryGetValue(a^, Fwd) then
-      //  a^ := Fwd;
+      else if FForwardsOle32.TryGetValue(a^, Fwd) then
+        a^ := Fwd;
       RangeChecker := a^;
     end;
 
@@ -268,6 +269,7 @@ begin
 
           Addresses.Add(RM.Name, TList<PPointer>.Create);
           DLLNames.Add(RM.Name);
+          //Log(ltInfo, Format('Adding %s because of %p', [RM.Name, a^]));
         end;
 
         if RM.ExportTbl.ContainsKey(a^) then
@@ -281,7 +283,7 @@ begin
     Inc(a);
   end;
 
-  ImportSect := PE.CreateSection('.import', $3000);
+  ImportSect := PE.CreateSection('.import', $1000);
 
   Section := AllocMem(ImportSect.Header.SizeOfRawData);
   Pointer(Descriptors) := Section; // Map the Descriptors array to the start of the section
@@ -314,7 +316,7 @@ begin
         FillChar((Section + ImportSect.Header.SizeOfRawData - $1000)^, $1000, 0);
         Strs := Section + Diff;
         Pointer(Descriptors) := Section;
-        Log(ltInfo, 'Increased import section size to ' + IntToHex(ImportSect.Header.SizeOfRawData, 4));
+        //Log(ltInfo, 'Increased import section size to ' + IntToHex(ImportSect.Header.SizeOfRawData, 4));
       end;
     end;
   end;
@@ -326,33 +328,12 @@ begin
     Size := DLLNames.Count * SizeOf(TImageImportDescriptor);
   end;
 
-  while ImportSect.Header.SizeOfRawData > $1000 do
-  begin
-    NotZero := False;
-    for i := ImportSect.Header.SizeOfRawData - $1000 to ImportSect.Header.SizeOfRawData - 1 do
-      if Section[i] <> 0 then
-      begin
-        NotZero := True;
-        Break;
-      end;
-
-    if not NotZero then
-    begin
-      Dec(ImportSect.Header.SizeOfRawData, $1000);
-      Dec(ImportSect.Header.Misc.VirtualSize, $1000);
-      Dec(PE.NTHeaders.OptionalHeader.SizeOfImage, $1000);
-      ReallocMem(ImportSect.Data, ImportSect.Header.SizeOfRawData);
-    end
-    else
-      Break;
-  end;
-
   Pointer(Descriptors) := nil;
   DLLNames.Free;
   Addresses.Free;
   for RM in Modules.Values do
   begin
-    FreeAndNil(RM.ExportTbl);
+    RM.ExportTbl.Free;
     Dispose(RM);
   end;
   Modules.Free;
@@ -392,6 +373,30 @@ begin
   end;
 
   FreeMem(Exp);
+end;
+
+function TDumper.GetLocalProcAddr(hModule: HMODULE; ProcName: PAnsiChar): Pointer;
+var
+  Exp: PImageExportDirectory;
+  Off: PByte;
+  a, n: PCardinal;
+  o: PWord;
+  i: Integer;
+begin
+  with PImageNtHeaders(hModule + Cardinal(PImageDosHeader(hModule)._lfanew)).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT] do
+  begin
+    Exp := Pointer(hModule + VirtualAddress);
+    Off := PByte(Exp) - VirtualAddress;
+  end;
+
+  Pointer(a) := Off + Exp.AddressOfFunctions;
+  Pointer(n) := Off + Exp.AddressOfNames;
+  Pointer(o) := Off + Exp.AddressOfNameOrdinals;
+  for i := 0 to Exp.NumberOfNames - 1 do
+    if AnsiStrComp(PAnsiChar(Off + n[i]), ProcName) = 0 then
+      Exit(Pointer(hModule + a[o[i]]));
+
+  Result := nil;
 end;
 
 function TDumper.RPM(Address: NativeUInt; Buf: Pointer; BufSize: NativeUInt): Boolean;

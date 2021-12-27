@@ -9,3 +9,5 @@ Functions:
 * Shrink: Deletes all sections that are no longer needed (if you unvirtualized or if your binary does not use virtualization).
 
 Note: The tool focuses on cleanness of the resulting binaries. Things such as VM anti-dump are explicitly *not* fixed.
+
+Important: Never activate any compatibility mode options for Magicmida or for the target you're unpacking. It would very likely screw up the unpacking process due to shimming.

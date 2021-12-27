@@ -731,9 +731,7 @@ begin
   FGuardStart := FImageBase + FPESections[0].VirtualAddress;
   FGuardEnd := FImageBase + FBaseOfData;
   VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, OldProt);
-
-  if AncientVer then
-    Log(ltInfo, 'Please wait, API call tracing in progress...');
+  Log(ltInfo, 'Please wait, call site tracing might take a while...');
 
   FFirstRealAPI := GetProcAddress(mK32, 'GetSystemTimeAsFileTime');
   //FFirstRealAPI := GetProcAddress(mK32, 'HeapCreate');
