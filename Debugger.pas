@@ -47,7 +47,7 @@ type
     FImgSize: NativeUInt;
     TMSect: PByte;
     TMSectR: TMemoryRegion;
-    CheckProtNew, Base1, RepEIP, NtQIP: NativeUInt;
+    Base1, RepEIP, NtQIP: NativeUInt;
     CloseHandleAPI, AllocMemAPI, FFirstRealAPI, KiFastSystemCall, NtSIT, NtQIP64, Cmp10000, CmpImgBase, MagicJump: Pointer;
     BaseAccessed, NewVer, AncientVer: Boolean;
     AllocMemCounter: Integer;
@@ -1004,15 +1004,12 @@ end;
 procedure TDebugger.TMInit(var hPE: THandle);
 var
   Buf, BufB, Test: PByte;
-  x, y: Cardinal;
+  x: Cardinal;
   Sect: PImageSectionHeader;
-  TestBase: Cardinal;
-  IsNew: Boolean;
   w: NativeUInt;
 begin
   if (hPE = 0) or (hPE = INVALID_HANDLE_VALUE) then
   begin
-    // Niggers
     hPE := CreateFile(PChar(FExecutable), GENERIC_READ, FILE_SHARE_READ, nil, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     if hPE = INVALID_HANDLE_VALUE then
       raise Exception.CreateFmt('CreateFile code %d', [GetLastError]);
@@ -1035,10 +1032,9 @@ begin
   FBaseOfData := PImageNTHeaders(Buf).OptionalHeader.BaseOfData;
 
   Base1 := Sect[0].Misc.VirtualSize;
-  TestBase := Sect[2].VirtualAddress + FImageBase;
 
-  //if PImageNTHeaders(Buf)^.OptionalHeader.DllCharacteristics and $40 <> 0 then
-  //  raise Exception.Create('Executable is ASLR-aware! Patch DllCharacteristics.');
+  if PImageNTHeaders(Buf)^.OptionalHeader.DllCharacteristics and $40 <> 0 then
+    Log(ltFatal, 'Executable is ASLR-aware! Patch DllCharacteristics manually in the dump!');
 
   // PE Header Antidump
   Test := PByte(PByte(@Sect[2].Name[1]) - BufB) + FImageBase;
@@ -1047,39 +1043,13 @@ begin
   if not WriteProcessMemory(FProcess.hProcess, Test, @x, 1, w) then
     raise Exception.CreateFmt('Fixing PE header antidump failed! Code: %d', [GetLastError]);
 
-  y := Sect[2].Misc.VirtualSize;
-  if (y = 0) or (y > 4 * 1024 * 1024) then
-    raise Exception.CreateFmt('Unexpected 2nd section size: %d', [Sect[2].Misc.VirtualSize]);
+  //y := Sect[2].Misc.VirtualSize;
+  //if (y = 0) or (y > 4 * 1024 * 1024) then
+  //  raise Exception.CreateFmt('Unexpected 3rd section size: %d', [Sect[2].Misc.VirtualSize]);
 
   FImgSize := PImageNTHeaders(Buf)^.OptionalHeader.SizeOfImage + FImageBase;
   Log(ltInfo, Format('Image boundary: %.8X', [FImgSize]));
 
-  GetMem(Test, y);
-  RPM(TestBase, Test, y);
-  x := 0;
-  IsNew := False;
-  repeat
-    if PCardinal(Test + x)^ <> 0 then
-    begin
-      IsNew := True;
-      Break;
-    end;
-    Inc(x, 4);
-  until x >= y;
-
-  if IsNew then
-  begin
-    x := FindStatic('000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000', Test, $1000);
-    if x = 0 then
-      raise Exception.Create('Anti-Dump store location not found');
-
-    Inc(TestBase, x);
-    TestBase := (TestBase and $FFFFFFF0) + $10;
-    Log(ltGood, 'Found new Anti-Dump store location at address: ' + IntToHex(TestBase, 8));
-  end;
-
-  CheckProtNew := TestBase + $110;
-  FreeMem(Test);
   FreeMem(BufB);
 
   AllocMemAPI := GetProcAddress(GetModuleHandle('ntdll.dll'), 'ZwAllocateVirtualMemory');
