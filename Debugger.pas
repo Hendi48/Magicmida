@@ -1033,9 +1033,6 @@ begin
 
   Base1 := Sect[0].Misc.VirtualSize;
 
-  if PImageNTHeaders(Buf)^.OptionalHeader.DllCharacteristics and $40 <> 0 then
-    Log(ltFatal, 'Executable is ASLR-aware! Patch DllCharacteristics manually in the dump!');
-
   // PE Header Antidump
   Test := PByte(PByte(@Sect[2].Name[1]) - BufB) + FImageBase;
   VirtualProtectEx(FProcess.hProcess, Test, 1, PAGE_READWRITE, @x);

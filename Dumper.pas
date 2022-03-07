@@ -172,6 +172,12 @@ begin
     PE.NTHeaders.FileHeader.NumberOfSections := Length(PE.Sections);
     PE.NTHeaders.OptionalHeader.AddressOfEntryPoint := FOEP - FImageBase;
 
+    if (PE.NTHeaders.OptionalHeader.DllCharacteristics and $40) <> 0 then
+    begin
+      Log(ltInfo, 'Executable is ASLR-aware - disabling the flag in the dump');
+      PE.NTHeaders.OptionalHeader.DllCharacteristics := PE.NTHeaders.OptionalHeader.DllCharacteristics and not $40;
+    end;
+
     PE.SaveToStream(FS);
 
     FS.Seek(FIAT - FImageBase, soBeginning);
