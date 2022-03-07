@@ -2,7 +2,10 @@ unit Dumper;
 
 interface
 
-uses Windows, SysUtils, Classes, Generics.Collections, TlHelp32, PEInfo;
+uses Windows, SysUtils, Classes, Generics.Collections, TlHelp32, PEInfo, Utils;
+
+const
+  MAX_IAT_SIZE = $2000; // max 2048 imports
 
 type
   TExportTable = TDictionary<Pointer, string>;
@@ -16,6 +19,15 @@ type
 
   TForwardDict = TDictionary<Pointer, Pointer>;
 
+  TImportThunk = class
+  public
+    Name: string;
+    Addresses: TList<PPointer>;
+
+    constructor Create(const AName: string);
+    destructor Destroy; override;
+  end;
+
   TDumper = class
   private
     FProcess: TProcessInformation;
@@ -23,6 +35,7 @@ type
     FForwards: TForwardDict; // Key: NTDLL, Value: kernel32 (points to API)
     FForwardsType2: TForwardDict; // Key: NTDLL, Value: user32 (points to fwd-string)
     FForwardsOle32: TForwardDict; // Key: combase, Value: ole32
+    FForwardsNetapi32: TForwardDict; // Key: netutils, Value: netapi32
     FIATImage: PByte;
     FIATImageSize: Cardinal;
 
@@ -68,6 +81,7 @@ begin
   FForwards := TForwardDict.Create(32);
   FForwardsType2 := TForwardDict.Create(16);
   FForwardsOle32 := TForwardDict.Create(32);
+  FForwardsNetapi32 := TForwardDict.Create(32);
   CollectNTFwd;
 end;
 
@@ -75,6 +89,8 @@ destructor TDumper.Destroy;
 begin
   FForwards.Free;
   FForwardsType2.Free;
+  FForwardsOle32.Free;
+  FForwardsNetapi32.Free;
   if FIATImage <> nil then
     FreeMem(FIATImage);
 
@@ -88,11 +104,16 @@ begin
 end;
 
 procedure TDumper.CollectNTFwd;
+var
+  hNetapi: HMODULE;
 begin
   CollectForwards(FForwards, GetModuleHandle(kernel32), 0);
   if FHUsr <> 0 then
     CollectForwards(FForwardsType2, GetModuleHandle(user32), FHUsr);
   CollectForwards(FForwardsOle32, GetModuleHandle('ole32.dll'), 0);
+  hNetapi := LoadLibrary('netapi32.dll');
+  CollectForwards(FForwardsNetapi32, hNetapi, 0);
+  FreeLibrary(hNetapi);
 end;
 
 procedure TDumper.CollectForwards(Fwds: TForwardDict; hModReal, hModScan: HMODULE);
@@ -170,8 +191,9 @@ var
   PE: TPEHeader;
   a: ^PByte;
   Fwd: Pointer;
-  Addresses: TDictionary<string, TList<PPointer>>;
-  DLLNames: TList<string>;
+  Thunks: TList<TImportThunk>;
+  Thunk: TImportThunk;
+  NeedNewThunk, Found: Boolean;
   hSnap: THandle;
   ME: TModuleEntry32;
   Modules: TDictionary<string, PRemoteModule>;
@@ -188,11 +210,11 @@ begin
   PE.Sanitize;
   FreeMem(Section);
 
-  GetMem(IAT, $2000);
-  RPM(FIAT, IAT, $2000);
+  GetMem(IAT, MAX_IAT_SIZE);
+  RPM(FIAT, IAT, MAX_IAT_SIZE);
 
   IATSize := 0;
-  for i := 0 to $2000 - 9 do
+  for i := 0 to MAX_IAT_SIZE - 9 do
     if PUInt64(IAT + i)^ = 0 then
     begin
       IATSize := i;
@@ -201,7 +223,7 @@ begin
 
   if IATSize = 0 then
   begin
-    for i := 0 to $2000 - 13 do
+    for i := 0 to MAX_IAT_SIZE - 13 do
       if (PCardinal(IAT + i)^ = 0) and (PCardinal(IAT + i + 8)^ = 0) and (PCardinal(IAT + i + 4)^ < FImageBase + PE.NTHeaders.OptionalHeader.SizeOfImage) then
       begin
         IATSize := i;
@@ -237,9 +259,9 @@ begin
   until not Module32Next(hSnap, ME);
   CloseHandle(hSnap);
 
-  DLLNames := TList<string>.Create;
-  Addresses := TObjectDictionary<string, TList<PPointer>>.Create([doOwnsValues]);
+  Thunks := TObjectList<TImportThunk>.Create;
   a := Pointer(IAT);
+  NeedNewThunk := False; // whether there's an address "gap" (example: k32-api, 0, k32-api)
   for i := 0 to IATSize div SizeOf(Pointer) - 1 do
   begin
     //Log(ltInfo, IntToHex(UIntPtr(a), 8) + ' -> ' + IntToHex(UIntPtr(a^), 8));
@@ -254,31 +276,39 @@ begin
       if FForwards.TryGetValue(a^, Fwd) then
         a^ := Fwd
       else if FForwardsOle32.TryGetValue(a^, Fwd) then
+        a^ := Fwd
+      else if FForwardsNetapi32.TryGetValue(a^, Fwd) then
         a^ := Fwd;
       RangeChecker := a^;
     end;
 
+    Found := False;
     for RM in Modules.Values do
       if (RangeChecker > RM.Base) and (RangeChecker < RM.EndOff) then
       begin
-        if not Addresses.ContainsKey(RM.Name) then
-        begin
+        if RM.ExportTbl = nil then
           GatherModuleExportsFromRemoteProcess(RM);
-          if not RM.ExportTbl.ContainsKey(a^) then
-            Break;
-
-          Addresses.Add(RM.Name, TList<PPointer>.Create);
-          DLLNames.Add(RM.Name);
-          //Log(ltInfo, Format('Adding %s because of %p', [RM.Name, a^]));
-        end;
 
         if RM.ExportTbl.ContainsKey(a^) then
-          Addresses[RM.Name].Add(PPointer(a))
+        begin
+          if (Thunks.Count = 0) or (Thunks.Last.Name <> RM.Name) or NeedNewThunk then
+          begin
+            Thunks.Add(TImportThunk.Create(RM.Name));
+            NeedNewThunk := False; // reset
+          end;
+
+          Found := True;
+          //Log(ltInfo, 'IAT ' + IntToHex(UIntPtr(a) - UIntPtr(IAT) + FIAT, 8) + ' -> API ' + IntToHex(UIntPtr(a^), 8) + ' belongs to ' + RM.Name);
+          Thunks.Last.Addresses.Add(PPointer(a))
+        end
         else
           Log(ltFatal, 'IAT ' + IntToHex(UIntPtr(a) - UIntPtr(IAT) + FIAT, 8) + ' -> API ' + IntToHex(UIntPtr(a^), 8) + ' not in export table of ' + RM.Name + ' (likely a bogus entry)');
 
         Break;
       end;
+
+    if not Found then
+      NeedNewThunk := True;
 
     Inc(a);
   end;
@@ -287,22 +317,25 @@ begin
 
   Section := AllocMem(ImportSect.Header.SizeOfRawData);
   Pointer(Descriptors) := Section; // Map the Descriptors array to the start of the section
-  Strs := Section + (DLLNames.Count + 1) * SizeOf(TImageImportDescriptor); // Last descriptor is empty
+  Strs := Section + (Thunks.Count + 1) * SizeOf(TImageImportDescriptor); // Last descriptor is empty
 
-  for i := 0 to Addresses.Count - 1 do
+  i := 0;
+  for Thunk in Thunks do
   begin
-    Descriptors[i].FirstThunk := (FIAT - FImageBase) + UIntPtr(Addresses[DLLNames[i]][0]) - UIntPtr(IAT);
+    Descriptors[i].FirstThunk := (FIAT - FImageBase) + UIntPtr(Thunk.Addresses.First) - UIntPtr(IAT);
     Descriptors[i].Name := PE.ConvertOffsetToRVAVector(ImportSect.Header.PointerToRawData + Cardinal(Strs - Section));
-    s := AnsiString(DLLNames[i]);
+    Inc(i);
+    s := AnsiString(Thunk.Name);
     Move(s[1], Strs^, Length(s));
     Inc(Strs, Length(s) + 1);
-    RM := Modules[DLLNames[i]];
-    Log(ltInfo, 'Thunk ' + DLLNames[i] + ' - first import: ' + RM.ExportTbl[Addresses[DLLNames[i]][0]^]);
-    for j := 0 to Addresses[DLLNames[i]].Count - 1 do
+    RM := Modules[Thunk.Name];
+    Log(ltInfo, 'Thunk ' + Thunk.Name + ' - first import: ' + RM.ExportTbl[Thunk.Addresses.First^]);
+    for j := 0 to Thunk.Addresses.Count - 1 do
     begin
       Inc(Strs, 2); // Hint
-      s := AnsiString(RM.ExportTbl[Addresses[DLLNames[i]][j]^]);
-      Addresses[DLLNames[i]][j]^ := Pointer(PE.ConvertOffsetToRVAVector(ImportSect.Header.PointerToRawData + Cardinal(Strs - 2 - Section)));
+      s := AnsiString(RM.ExportTbl[Thunk.Addresses[j]^]);
+      // Set the address in the IAT to this string entry
+      Thunk.Addresses[j]^ := Pointer(PE.ConvertOffsetToRVAVector(ImportSect.Header.PointerToRawData + Cardinal(Strs - 2 - Section)));
       Move(s[1], Strs^, Length(s));
       Inc(Strs, Length(s) + 1);
 
@@ -325,12 +358,11 @@ begin
   with PE.NTHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT] do
   begin
     VirtualAddress := ImportSect.Header.VirtualAddress;
-    Size := DLLNames.Count * SizeOf(TImageImportDescriptor);
+    Size := Thunks.Count * SizeOf(TImageImportDescriptor);
   end;
 
   Pointer(Descriptors) := nil;
-  DLLNames.Free;
-  Addresses.Free;
+  Thunks.Free;
   for RM in Modules.Values do
   begin
     RM.ExportTbl.Free;
@@ -404,6 +436,21 @@ begin
   Result := ReadProcessMemory(FProcess.hProcess, Pointer(Address), Buf, BufSize, BufSize);
   if not Result then
     Log(ltFatal, 'RPM failed');
+end;
+
+{ TImportThunk }
+
+constructor TImportThunk.Create(const AName: string);
+begin
+  Name := AName;
+  Addresses := TList<PPointer>.Create;
+end;
+
+destructor TImportThunk.Destroy;
+begin
+  Addresses.Free;
+
+  inherited;
 end;
 
 end.
