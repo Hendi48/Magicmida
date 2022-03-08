@@ -19,7 +19,8 @@ type
     FDumpSize: Cardinal;
     FLFANew: Cardinal;
 
-    procedure Align(var V: Cardinal);
+    procedure FileAlign(var V: Cardinal);
+    procedure SectionAlign(var V: Cardinal);
   public
     NTHeaders: TImageNTHeaders;
 
@@ -32,6 +33,7 @@ type
 
     function ConvertOffsetToRVAVector(Offset: NativeUInt): NativeUInt;
 
+    function TrimHugeSections(Buf: PByte): Cardinal;
     procedure Sanitize;
 
     procedure SaveToStream(S: TStream);
@@ -107,7 +109,7 @@ begin
     Dec(FSections[i].Header.PointerToRawData, Sz);
   end;
   Inc(FSections[Idx - 1].Header.Misc.VirtualSize, FSections[Idx].Header.Misc.VirtualSize);
-  Align(FSections[Idx - 1].Header.Misc.VirtualSize);
+  SectionAlign(FSections[Idx - 1].Header.Misc.VirtualSize);
 
   if not IsLast then
     Move(FSections[Idx + 1], FSections[Idx], SizeOf(TPESection) * (High(FSections) - Idx));
@@ -140,7 +142,7 @@ begin
     end;
   end;
   NTHeaders.OptionalHeader.SizeOfHeaders := FSections[0].Header.PointerToRawData;
-  // Must have write access in code section
+  // Must have write access in code section (in case .text and .data were merged)
   FSections[0].Header.Characteristics := FSections[0].Header.Characteristics or IMAGE_SCN_MEM_WRITE;
 end;
 
@@ -155,10 +157,50 @@ begin
   begin
     S.Write(FSections[i].Header, SizeOf(TImageSectionHeader));
   end;
+  // Zero out some leftovers that may be in the header
   GetMem(LulzMem, $200);
   FillChar(LulzMem^, $200, 0);
   S.Write(LulzMem^, $200);
   FreeMem(LulzMem);
+end;
+
+function TPEHeader.TrimHugeSections(Buf: PByte): Cardinal;
+var
+  i, j, ZeroStart: Integer;
+  SectionStart, OldSectionSize, NewSectionSize, Delta: Cardinal;
+begin
+  Result := 0;
+  for i := 0 to NTHeaders.FileHeader.NumberOfSections - 1 do
+  begin
+    SectionStart := FSections[i].Header.PointerToRawData;
+    ZeroStart := -1;
+    for j := (FSections[i].Header.SizeOfRawData div 4) - 1 downto 0 do
+      if PCardinal(Buf + SectionStart + Cardinal(j) * 4)^ = 0 then
+        ZeroStart := j * 4
+      else
+        Break;
+
+    // We could reduce every single section to its minimal raw size, but having file offset = rva
+    // is pretty convenient, so we only trim sections that were obviously bloated up
+    if (ZeroStart <> -1) and (FSections[i].Header.SizeOfRawData - Cardinal(ZeroStart) > 1 * 1024 * 1024) then
+    begin
+      OldSectionSize := FSections[i].Header.SizeOfRawData;
+      SectionAlign(OldSectionSize); // Because of Sanitize(), the actual size is always section-aligned in our case
+
+      NewSectionSize := ZeroStart;
+      FileAlign(NewSectionSize);
+      //Log(ltInfo, 'Reducing ' + PAnsiChar(@FSections[i].Header.Name) + Format('ZeroStart: %X, NewSectionSize: %X, OldSize: %X', [ZeroStart, NewSectionSize, OldSectionSize]));
+      Delta := OldSectionSize - NewSectionSize;
+      Inc(Result, Delta);
+      FSections[i].Header.SizeOfRawData := NewSectionSize;
+      if i < High(FSections) then
+      begin
+        Move(Buf[FSections[i + 1].Header.PointerToRawData], Buf[SectionStart + NewSectionSize], FDumpSize - SectionStart - OldSectionSize);
+        for j := i + 1 to High(FSections) do
+          Dec(FSections[j].Header.PointerToRawData, Delta);
+      end;
+    end;
+  end;
 end;
 
 procedure TPEHeader.AddSectionToArray;
@@ -166,7 +208,16 @@ begin
   SetLength(FSections, Length(FSections) + 1);
 end;
 
-procedure TPEHeader.Align(var V: Cardinal);
+procedure TPEHeader.FileAlign(var V: Cardinal);
+var
+  Delta: Cardinal;
+begin
+  Delta := V mod NTHeaders.OptionalHeader.FileAlignment;
+  if Delta > 0 then
+    Inc(V, NTHeaders.OptionalHeader.FileAlignment - Delta);
+end;
+
+procedure TPEHeader.SectionAlign(var V: Cardinal);
 var
   Delta: Cardinal;
 begin

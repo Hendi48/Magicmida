@@ -156,13 +156,18 @@ var
   FS: TFileStream;
   Buf: PByte;
   i: Integer;
+  Size, Delta: Cardinal;
 begin
   FS := TFileStream.Create(FileName, fmCreate);
   try
-    GetMem(Buf, PE.DumpSize);
-    if not RPM(FImageBase, Buf, PE.DumpSize) then
+    Size := PE.DumpSize;
+    GetMem(Buf, Size);
+    if not RPM(FImageBase, Buf, Size) then
       raise Exception.Create('DumpToFile RPM failed');
-    FS.Write(Buf^, PE.DumpSize);
+    Delta := PE.TrimHugeSections(Buf);
+    Dec(Size, Delta);
+    Dec(FIAT, Delta);
+    FS.Write(Buf^, Size);
     FreeMem(Buf);
 
     for i := PE.NTHeaders.FileHeader.NumberOfSections to High(PE.Sections) do
