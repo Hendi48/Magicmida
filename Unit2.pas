@@ -4,7 +4,7 @@ interface
 
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics,
-  Controls, Forms, Dialogs, StdCtrls, Debugger, ComCtrls, ImgList;
+  Controls, Forms, Dialogs, StdCtrls, Debugger, ComCtrls, ImgList, Utils;
 
 type
   TThemidaUnpackerWnd = class(TForm)
@@ -20,8 +20,6 @@ type
     procedure btnShrinkClick(Sender: TObject);
     procedure btnMakeDataSectClick(Sender: TObject);
   private
-    FDbg: TDebugger;
-
     procedure Log(MsgType: TLogMsgType; const Msg: string);
   end;
 
@@ -45,7 +43,7 @@ procedure TThemidaUnpackerWnd.btnUnpackClick(Sender: TObject);
 begin
   if OD.Execute then
   begin
-    FDbg := TDebugger.Create(OD.FileName, '', Log);
+    TDebugger.Create(OD.FileName, '', Log).FreeOnTerminate := True;
   end;
 end;
 

@@ -11,7 +11,8 @@ uses
   Dumper in 'Dumper.pas',
   PEInfo in 'PEInfo.pas',
   Patcher in 'Patcher.pas',
-  BeaEngineDelphi32 in 'BeaEngineDelphi32.pas';
+  BeaEngineDelphi32 in 'BeaEngineDelphi32.pas',
+  Tracer in 'Tracer.pas';
 
 {$R *.res}
 

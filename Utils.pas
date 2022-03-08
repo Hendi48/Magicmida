@@ -4,6 +4,10 @@ interface
 
 uses Windows, SysUtils;
 
+type
+  TLogMsgType = (ltInfo, ltGood, ltFatal);
+  TLogProc = procedure(MsgType: TLogMsgType; const Msg: string) of object;
+
 function NtQueryInformationProcess(ProcessHandle: THandle; ProcessInformationClass: DWORD;
   ProcessInformation: Pointer; ProcessInformationLength: DWORD; ReturnLength: PCardinal): Integer; stdcall; external 'ntdll.dll';
 function NtQueryInformationThread(ThreadHandle: THandle; ThreadInformationClass: DWORD;
