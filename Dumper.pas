@@ -105,14 +105,16 @@ end;
 
 procedure TDumper.CollectNTFwd;
 var
-  hNetapi: HMODULE;
+  hNetapi, hSrvcli: HMODULE;
 begin
   CollectForwards(FForwards, GetModuleHandle(kernel32), 0);
   if FHUsr <> 0 then
     CollectForwards(FForwardsType2, GetModuleHandle(user32), FHUsr);
   CollectForwards(FForwardsOle32, GetModuleHandle('ole32.dll'), 0);
   hNetapi := LoadLibrary('netapi32.dll');
+  hSrvcli := LoadLibrary('srvcli.dll');
   CollectForwards(FForwardsNetapi32, hNetapi, 0);
+  FreeLibrary(hSrvcli);
   FreeLibrary(hNetapi);
 end;
 
@@ -120,7 +122,7 @@ procedure TDumper.CollectForwards(Fwds: TForwardDict; hModReal, hModScan: HMODUL
 var
   ModScan: PByte;
   ExpDir: PImageExportDirectory;
-  i, Posi: Integer;
+  i, DotPos: Integer;
   a: PCardinal;
   Fwd: PAnsiChar;
   hMod: HMODULE;
@@ -135,17 +137,19 @@ begin
   for i := 0 to ExpDir.NumberOfFunctions - 1 do
   begin
     Fwd := PAnsiChar(ModScan + a^); // e.g. NTDLL.RtlAllocateHeap
-    Posi := Pos(AnsiString('.'), Fwd);
-    if (Length(Fwd) in [10..90]) and (((Posi > 0) and (Posi < 15)) or (Pos(AnsiString('api-ms-win'), Fwd) > 0)) and (Pos(AnsiString('.#'), Fwd) = 0) then
+    DotPos := Pos(AnsiString('.'), Fwd);
+    if (Length(Fwd) in [10..90]) and (((DotPos > 0) and (DotPos < 15)) or (Pos(AnsiString('api-ms-win'), Fwd) > 0)) and (Pos(AnsiString('.#'), Fwd) = 0) then
     begin
-      hMod := GetModuleHandleA(PAnsiChar(Copy(Fwd, 1, Posi - 1)));
+      hMod := GetModuleHandleA(PAnsiChar(Copy(Fwd, 1, DotPos - 1)));
       if hMod > 0 then
       begin
         // Not using the normal GetProcAddress because it can return apphelp hooks (e.g., CoCreateInstance when running as admin)
-        ProcAddr := GetLocalProcAddr(hMod, PAnsiChar(Copy(Fwd, Posi + 1, 50)));
+        ProcAddr := GetLocalProcAddr(hMod, PAnsiChar(Copy(Fwd, DotPos + 1, 50)));
         Fwds.AddOrSetValue(ProcAddr, PByte(hModReal) + a^);
-        //Log(ltInfo, Format('%s @ %p', [PAnsiChar(Copy(Fwd, Posi + 1, 50)), ProcAddr]));
-      end;
+        //Log(ltInfo, Format('%s @ %p', [PAnsiChar(Copy(Fwd, DotPos + 1, 50)), ProcAddr]));
+      end
+      //else
+      //  Log(ltFatal, Format('Forward target not loaded: %s', [string(AnsiString(PAnsiChar(Copy(Fwd, 1, DotPos - 1))))]));
     end;
     Inc(a);
   end;

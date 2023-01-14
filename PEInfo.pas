@@ -83,6 +83,8 @@ begin
   begin
     Misc.VirtualSize := Size;
     VirtualAddress := Prev.VirtualAddress + Prev.Misc.VirtualSize;
+    if (VirtualAddress and $FFF) <> 0 then
+      VirtualAddress := (VirtualAddress + $1000) and (not $FFF);
     PointerToRawData := Prev.PointerToRawData + Prev.SizeOfRawData;
     SizeOfRawData := Size;
     Characteristics := IMAGE_SCN_MEM_READ or IMAGE_SCN_CNT_INITIALIZED_DATA;
