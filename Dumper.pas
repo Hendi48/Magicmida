@@ -36,6 +36,7 @@ type
     FForwardsType2: TForwardDict; // Key: NTDLL, Value: user32 (points to fwd-string)
     FForwardsOle32: TForwardDict; // Key: combase, Value: ole32
     FForwardsNetapi32: TForwardDict; // Key: netutils, Value: netapi32
+    FAllModules: TDictionary<string, PRemoteModule>;
     FIATImage: PByte;
     FIATImageSize: Cardinal;
 
@@ -45,14 +46,19 @@ type
     procedure CollectNTFwd; overload;
     procedure CollectForwards(Fwds: TForwardDict; hModReal, hModScan: HMODULE); overload;
     procedure GatherModuleExportsFromRemoteProcess(M: PRemoteModule);
+    procedure TakeModuleSnapshot;
     function GetLocalProcAddr(hModule: HMODULE; ProcName: PAnsiChar): Pointer;
     function RPM(Address: NativeUInt; Buf: Pointer; BufSize: NativeUInt): Boolean;
   public
-    constructor Create(const AProcess: TProcessInformation; AImageBase, AOEP, AIAT: UIntPtr);
+    constructor Create(const AProcess: TProcessInformation; AImageBase, AOEP: UIntPtr);
     destructor Destroy; override;
 
     function Process: TPEHeader;
     procedure DumpToFile(const FileName: string; PE: TPEHeader);
+
+    function IsAPIAddress(Address: NativeUInt): Boolean;
+
+    property IAT: NativeUInt read FIAT write FIAT; // Virtual address of IAT in target
   end;
 
 implementation
@@ -61,15 +67,11 @@ uses Unit2, Debugger;
 
 { TDumper }
 
-constructor TDumper.Create(const AProcess: TProcessInformation; AImageBase, AOEP, AIAT: UIntPtr);
+constructor TDumper.Create(const AProcess: TProcessInformation; AImageBase, AOEP: UIntPtr);
 begin
   FProcess := AProcess;
   FOEP := AOEP;
-  FIAT := AIAT;
   FImageBase := AImageBase;
-
-  if FIAT > $70000000 then
-    raise Exception.Create('Wrong IAT address');
 
   if Win32MajorVersion > 5 then
   begin
@@ -86,11 +88,24 @@ begin
 end;
 
 destructor TDumper.Destroy;
+var
+  RM: PRemoteModule;
 begin
   FForwards.Free;
   FForwardsType2.Free;
   FForwardsOle32.Free;
   FForwardsNetapi32.Free;
+
+  if FAllModules <> nil then
+  begin
+    for RM in FAllModules.Values do
+    begin
+      RM.ExportTbl.Free;
+      Dispose(RM);
+    end;
+    FAllModules.Free;
+  end;
+
   if FIATImage <> nil then
     FreeMem(FIATImage);
 
@@ -203,21 +218,22 @@ var
   IAT: PByte;
   i, j: Integer;
   IATSize, Diff: Cardinal;
+  LastValidOffset: NativeUInt;
   PE: TPEHeader;
   a: ^PByte;
   Fwd: Pointer;
   Thunks: TList<TImportThunk>;
   Thunk: TImportThunk;
   NeedNewThunk, Found: Boolean;
-  hSnap: THandle;
-  ME: TModuleEntry32;
-  Modules: TDictionary<string, PRemoteModule>;
   RM: PRemoteModule;
   s: AnsiString;
   Section, Strs, RangeChecker: PByte;
   Descriptors: PImageImportDescriptor;
   ImportSect: PPESection;
 begin
+  if FIAT = 0 then
+    raise Exception.Create('Must set IAT before calling Process()');
+
   // Read header from memory
   GetMem(Section, $1000);
   RPM(FImageBase, Section, $1000);
@@ -228,51 +244,27 @@ begin
   GetMem(IAT, MAX_IAT_SIZE);
   RPM(FIAT, IAT, MAX_IAT_SIZE);
 
-  IATSize := 0;
-  for i := 0 to MAX_IAT_SIZE - 9 do
-    if PUInt64(IAT + i)^ = 0 then
-    begin
-      IATSize := i;
-      Break;
-    end;
-
-  if IATSize = 0 then
+  LastValidOffset := 0;
+  i := 0;
+  while i < MAX_IAT_SIZE do
   begin
-    for i := 0 to MAX_IAT_SIZE - 13 do
-      if (PCardinal(IAT + i)^ = 0) and (PCardinal(IAT + i + 8)^ = 0) and (PCardinal(IAT + i + 4)^ < FImageBase + PE.NTHeaders.OptionalHeader.SizeOfImage) then
-      begin
-        IATSize := i;
-        Break;
-      end;
+    if IsAPIAddress(PNativeUInt(IAT + i)^) then
+      LastValidOffset := NativeUInt(i);
 
-    if IATSize = 0 then
-      raise Exception.Create('IAT size could not be determined');
+    Inc(i, SizeOf(Pointer));
   end;
+
+  IATSize := LastValidOffset + SizeOf(Pointer);
+  Log(ltInfo, Format('Determined IAT size: %X', [IATSize]));
 
   with PE.NTHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT] do
   begin
     VirtualAddress := FIAT - FImageBase;
-    Size := IATSize + 4;
+    Size := IATSize + SizeOf(Pointer);
   end;
 
-  Modules := TDictionary<string, PRemoteModule>.Create;
-  hSnap := CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, FProcess.dwProcessId);
-  ME.dwSize := SizeOf(TModuleEntry32);
-  if not Module32First(hSnap, ME) then
-    raise Exception.Create('Module32First');
-  repeat
-    if ME.hModule <> FImageBase then
-    begin
-      //Log(ltInfo, IntToHex(ME.hModule, 8) + ' : ' + IntToHex(ME.modBaseSize, 4) + ' : ' + string(ME.szModule));
-      New(RM);
-      RM.Base := ME.modBaseAddr;
-      RM.EndOff := ME.modBaseAddr + ME.modBaseSize;
-      RM.Name := LowerCase(ME.szModule);
-      RM.ExportTbl := nil;
-      Modules.AddOrSetValue(RM.Name, RM);
-    end;
-  until not Module32Next(hSnap, ME);
-  CloseHandle(hSnap);
+  if FAllModules = nil then
+    TakeModuleSnapshot;
 
   Thunks := TObjectList<TImportThunk>.Create;
   a := Pointer(IAT);
@@ -298,7 +290,7 @@ begin
     end;
 
     Found := False;
-    for RM in Modules.Values do
+    for RM in FAllModules.Values do
       if (RangeChecker > RM.Base) and (RangeChecker < RM.EndOff) then
       begin
         if RM.ExportTbl = nil then
@@ -343,7 +335,7 @@ begin
     s := AnsiString(Thunk.Name);
     Move(s[1], Strs^, Length(s));
     Inc(Strs, Length(s) + 1);
-    RM := Modules[Thunk.Name];
+    RM := FAllModules[Thunk.Name];
     Log(ltInfo, 'Thunk ' + Thunk.Name + ' - first import: ' + RM.ExportTbl[Thunk.Addresses.First^]);
     for j := 0 to Thunk.Addresses.Count - 1 do
     begin
@@ -376,14 +368,7 @@ begin
     Size := Thunks.Count * SizeOf(TImageImportDescriptor);
   end;
 
-  Pointer(Descriptors) := nil;
   Thunks.Free;
-  for RM in Modules.Values do
-  begin
-    RM.ExportTbl.Free;
-    Dispose(RM);
-  end;
-  Modules.Free;
 
   FIATImage := IAT;
   FIATImageSize := IATSize;
@@ -444,6 +429,51 @@ begin
       Exit(Pointer(hModule + a[o[i]]));
 
   Result := nil;
+end;
+
+function TDumper.IsAPIAddress(Address: NativeUInt): Boolean;
+var
+  RM: PRemoteModule;
+begin
+  if FAllModules = nil then
+    TakeModuleSnapshot;
+
+  for RM in FAllModules.Values do
+    if (Address >= NativeUInt(RM.Base)) and (Address < NativeUInt(RM.EndOff)) then
+    begin
+      if RM.ExportTbl = nil then
+        GatherModuleExportsFromRemoteProcess(RM);
+
+      Exit(RM.ExportTbl.ContainsKey(Pointer(Address)));
+    end;
+
+  Result := False;
+end;
+
+procedure TDumper.TakeModuleSnapshot;
+var
+  hSnap: THandle;
+  ME: TModuleEntry32;
+  RM: PRemoteModule;
+begin
+  FAllModules := TDictionary<string, PRemoteModule>.Create;
+  hSnap := CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, FProcess.dwProcessId);
+  ME.dwSize := SizeOf(TModuleEntry32);
+  if not Module32First(hSnap, ME) then
+    raise Exception.Create('Module32First');
+  repeat
+    if ME.hModule <> FImageBase then
+    begin
+      //Log(ltInfo, IntToHex(ME.hModule, 8) + ' : ' + IntToHex(ME.modBaseSize, 4) + ' : ' + string(ME.szModule));
+      New(RM);
+      RM.Base := ME.modBaseAddr;
+      RM.EndOff := ME.modBaseAddr + ME.modBaseSize;
+      RM.Name := LowerCase(ME.szModule);
+      RM.ExportTbl := nil;
+      FAllModules.AddOrSetValue(RM.Name, RM);
+    end;
+  until not Module32Next(hSnap, ME);
+  CloseHandle(hSnap);
 end;
 
 function TDumper.RPM(Address: NativeUInt; Buf: Pointer; BufSize: NativeUInt): Boolean;

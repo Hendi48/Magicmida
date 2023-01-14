@@ -95,7 +95,7 @@ type
 
     procedure RestoreStolenOEPForMSVC6(hThread: THandle; var OEP: NativeUInt);
     procedure FixupAPICallSites(IAT: NativeUInt);
-    function DetermineIATAddress(OEP: NativeUInt): NativeUInt;
+    function DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
     procedure TraceImports(IAT: NativeUInt);
     function TraceIsAtAPI(const C: TContext): Boolean;
     procedure FinishUnpacking(OEP: NativeUInt);
@@ -1435,6 +1435,7 @@ var
   i: Integer;
   x: NativeUInt;
   FN: string;
+  Dumper: TDumper;
 begin
   // Remove EFL jumps from VM code
   for i := 0 to High(EFLs) do
@@ -1447,15 +1448,11 @@ begin
       Break;
   end;
 
+  Dumper := TDumper.Create(FProcess, FImageBase, OEP);
+
   // Look for IAT by analyzing code near OEP
-  try
-    IAT := DetermineIATAddress(OEP);
-    Log(ltGood, 'IAT: ' + IntToHex(IAT, 8));
-  except
-    // It's normal that this fails in samples that require FixupAPICallSites, because call dword ptr won't be found
-    IAT := FImageBase + FBaseOfData;
-    Log(ltInfo, 'DetermineIATAddress failed, fallback: ' + IntToHex(IAT, 8) + ' (MSVC only!)');
-  end;
+  IAT := DetermineIATAddress(OEP, Dumper);
+  Log(ltGood, 'IAT: ' + IntToHex(IAT, 8));
 
   // Themida v3: Weak traceable import protection
   if ThemidaV3 then
@@ -1475,11 +1472,9 @@ begin
 
   // Process the IAT into an import directory and dump the binary to disk
   FN := ExtractFilePath(FExecutable) + ChangeFileExt(ExtractFileName(FExecutable), 'U' + ExtractFileExt(FExecutable));
-  with TDumper.Create(FProcess, FImageBase, OEP, IAT) do
-  begin
-    DumpToFile(FN, Process());
-    Free;
-  end;
+  Dumper.IAT := IAT;
+  Dumper.DumpToFile(FN, Dumper.Process());
+  Dumper.Free;
 
   FHideThreadEnd := True;
   TerminateProcess(FProcess.hProcess, 0);
@@ -1487,7 +1482,7 @@ begin
   Log(ltGood, 'Don''t forget to MakeDataSect.');
 end;
 
-function TDebugger.DetermineIATAddress(OEP: NativeUInt): NativeUInt;
+function TDebugger.DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
 var
   TextBase, CodeSize: NativeUInt;
   CodeDump: PByte;
@@ -1511,6 +1506,9 @@ var
 
       if PByte(Dis.EIP)^ = $E8 then // call
       begin
+        if Dis.Instruction.AddrValue > TextBase + CodeSize then
+          Exit(0); // Probably direct API call. Handled below via FGuardAddrs.
+
         Result := FindCallOrJmpPtr(Dis.Instruction.AddrValue);
         if Result <> 0 then
           Exit;
@@ -1525,48 +1523,88 @@ var
     end;
   end;
 
-  function IsImportDirArtifact(Address, Data: NativeUInt): Boolean;
+  function ScanData(ToFind: NativeUInt): NativeUInt;
+  var
+    DataSize: NativeUInt;
+    DataSect: PByte;
+    DataSectWalker, DataSectBound: PNativeUInt;
   begin
-    // Delphi has the import directory and import address directory crammed into one section next to each other
-    // The import directory has some address artifacts left that Themida doesn't touch
-    // All addresses before the IAT should be 0 or an RVA into the same section ($6000 is an arbitrarily chosen threshold)
-    Result := (Data = 0) or (Abs((Data + FImageBase) - Address) < $6000);
+    DataSize := FPESections[0].Misc.VirtualSize - CodeSize;
+    GetMem(DataSect, DataSize);
+    try
+      if not RPM(TextBase + CodeSize, DataSect, DataSize) then
+        raise Exception.Create('DetermineIATAddress.ScanData: RPM failed');
+
+      // We assume the table is machine-word aligned.
+      DataSectWalker := PNativeUInt(DataSect);
+      DataSectBound := PNativeUInt(DataSect + DataSize);
+
+      while DataSectWalker < DataSectBound do
+      begin
+        if DataSectWalker^ = ToFind then
+          Exit(NativeUInt(PByte(DataSectWalker) - DataSect) + TextBase + CodeSize);
+        Inc(DataSectWalker);
+      end;
+    finally
+      FreeMem(DataSect);
+    end;
+
+    raise Exception.Create('Unable to find API in data part of section 0');
   end;
 
 var
-  IATRef, Seeker: NativeUInt;
+  IATRef, Seeker, Target: NativeUInt;
   IATData: array[0..1023] of NativeUInt;
+  Site: array[0..5] of Byte;
   i: Integer;
 begin
-  // For MSVC, the IAT usually resides at FImageBase + FBaseOfData
+  // For MSVC, the IAT often resides at FImageBase + FBaseOfData
   // Other compilers such as Delphi use a dedicated .idata section, but the IAT doesn't start directly at the beginning, so some guesswork is needed
 
   TextBase := FImageBase + FPESections[0].VirtualAddress;
   CodeSize := FBaseOfData - FPESections[0].VirtualAddress;
+  Log(ltInfo, Format('Text base: %.8X, code size: %X, data size: %X', [TextBase, CodeSize, FPESections[0].Misc.VirtualSize - CodeSize]));
   NumInstr := 0;
   IATRef := 0;
   GetMem(CodeDump, CodeSize);
   try
     if not RPM(TextBase, CodeDump, CodeSize) then
-      raise Exception.CreateFmt('DetermineIATAddress: RPM failed (size %X)', [CodeSize]);
+      raise Exception.Create('DetermineIATAddress: RPM failed');
 
     IATRef := FindCallOrJmpPtr(OEP);
     if IATRef = 0 then
-      raise Exception.Create('No IAT reference found near OEP');
+    begin
+      Log(ltInfo, 'No IAT reference found near OEP');
+      if FGuardAddrs.Count > 0 then
+      begin
+        RPM(FGuardAddrs[0], @Site, 6);
+        if (Site[0] = $E8) or (Site[0] = $E9) then
+          Target := PCardinal(@Site[1])^ + FGuardAddrs[0] + 5
+        else if (Site[1] = $E8) or (Site[1] = $E9) then
+          Target := PCardinal(@Site[2])^ + FGuardAddrs[0] + 6
+        else
+          raise Exception.Create('First guard addr is not call/jmp');
+
+        Log(ltInfo, Format('First guard addr %.8X yielded API %.8X', [FGuardAddrs[0], Target]));
+        IATRef := ScanData(Target);
+      end
+      else
+        raise Exception.Create('Found no way to obtain IAT reference');
+    end;
     Log(ltGood, 'First IAT ref: ' + IntToHex(IATRef, 8));
   finally
     FreeMem(CodeDump);
   end;
 
-  // FIXME: This can be problematic in Delphi binaries where IATRef ends up as something like XXX2230 and IAT start is XXX1F74
-  Seeker := IATRef and not $FFF;
+  // The IATRef we obtained points somewhere into the IAT area. Now we need to figure out the start of the table.
+  Seeker := IATRef - $1000;
   RPM(Seeker, @IATData, SizeOf(IATData));
   for i := 0 to High(IATData) do
   begin
-    if IsImportDirArtifact(Seeker, IATData[i]) then
+    if not Dumper.IsAPIAddress(IATData[i]) then
       Inc(Seeker, SizeOf(NativeUInt))
     else
-      Break;
+      Break; // Let's hope we didn't randomly stumble upon a valid API address somewhere before the IAT.
   end;
 
   Result := Seeker;
@@ -1733,7 +1771,7 @@ begin
     if IATData[i] = 0 then
     begin
       Inc(Consecutive0);
-      if Consecutive0 = 3 then
+      if Consecutive0 = 3 then  // This may vary
         Break;
     end;
     Consecutive0 := 0;
@@ -1762,6 +1800,11 @@ begin
           else if FTracedAPI <> 0 then
           begin
             Log(ltInfo, '-> ' + IntToHex(FTracedAPI, 8));
+            if (FTracedAPI < $10000) or ((FTracedAPI >= FImageBase) and (FTracedAPI < FImageBoundary)) then
+            begin
+              Log(ltInfo, 'Discarding result & aborting IAT tracing');
+              Break;
+            end;
             IATData[i] := FTracedAPI;
           end
           else
