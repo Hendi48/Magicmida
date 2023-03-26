@@ -12,7 +12,8 @@ uses
   PEInfo in 'PEInfo.pas',
   Patcher in 'Patcher.pas',
   BeaEngineDelphi32 in 'BeaEngineDelphi32.pas',
-  Tracer in 'Tracer.pas';
+  Tracer in 'Tracer.pas',
+  AntiDumpFix in 'AntiDumpFix.pas';
 
 {$R *.res}
 

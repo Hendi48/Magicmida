@@ -52,7 +52,7 @@ type
     AllocMemCounter: Integer;
     IJumper, MJ_1, MJ_2, MJ_3, MJ_4: NativeUInt;
     EFLs: array[0..2] of TEFLRecord;
-    ThemidaV3: Boolean;
+    ThemidaV3, FIsVMOEP: Boolean;
     FTracedAPI: NativeUInt;
 
     FGuardStart, FGuardEnd: NativeUInt;
@@ -94,6 +94,7 @@ type
     function ProcessGuardedAccess(hThread: THandle; var ExcRecord: TExceptionRecord): Cardinal;
 
     procedure RestoreStolenOEPForMSVC6(hThread: THandle; var OEP: NativeUInt);
+    procedure CheckVirtualizedOEP(OEP: NativeUInt);
     procedure FixupAPICallSites(IAT: NativeUInt);
     function DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
     procedure TraceImports(IAT: NativeUInt);
@@ -116,7 +117,7 @@ type
 
 implementation
 
-uses BeaEngineDelphi32, ShellAPI, Tracer;
+uses BeaEngineDelphi32, ShellAPI, Tracer, AntiDumpFix;
 
 { TDebugger }
 
@@ -1424,6 +1425,7 @@ begin
     Log(ltGood, 'OEP: ' + IntToHex(OEP, 8));
 
     RestoreStolenOEPForMSVC6(hThread, OEP);
+    CheckVirtualizedOEP(OEP);
 
     FinishUnpacking(OEP);
   end;
@@ -1472,6 +1474,15 @@ begin
   if FGuardAddrs.Count > 0 then
     FixupAPICallSites(IAT);
 
+  if FIsVMOEP and ThemidaV3 then
+  begin
+    with TAntiDumpFixer.Create(FProcess.hProcess, FImageBase) do
+    begin
+      RedirectOEP(OEP, IAT);
+      Free;
+    end;
+  end;
+
   // Process the IAT into an import directory and dump the binary to disk
   FN := ExtractFilePath(FExecutable) + ChangeFileExt(ExtractFileName(FExecutable), 'U' + ExtractFileExt(FExecutable));
   Dumper.IAT := IAT;
@@ -1490,7 +1501,7 @@ var
   CodeDump: PByte;
   NumInstr: Cardinal;
 
-  function FindCallOrJmpPtr(Address: NativeUInt): NativeUInt;
+  function FindCallOrJmpPtr(Address: NativeUInt; IgnoreMethodBoundary: Boolean = False): NativeUInt;
   var
     Dis: TDisasm;
     Len: Integer;
@@ -1499,14 +1510,14 @@ var
     FillChar(Dis, SizeOf(Dis), 0);
     Dis.EIP := NativeUInt(CodeDump) + Address - TextBase;
     Dis.VirtualAddr := Address;
-    while NumInstr < 100 do
+    while NumInstr < 200 do
     begin
       Len := DisasmCheck(Dis);
 
       if (PWord(Dis.EIP)^ = $15FF) or (PWord(Dis.EIP)^ = $25FF) then // call dword ptr/jmp dword ptr
         Exit(Dis.Argument1.Memory.Displacement);
 
-      if PByte(Dis.EIP)^ = $E8 then // call
+      if (PByte(Dis.EIP)^ = $E8) and not IgnoreMethodBoundary then // call
       begin
         if Dis.Instruction.AddrValue > TextBase + CodeSize then
           Exit(0); // Probably direct API call. Handled below via FGuardAddrs.
@@ -1516,7 +1527,7 @@ var
           Exit;
       end;
 
-      if (PByte(Dis.EIP)^ = $C3) or (PByte(Dis.EIP)^ = $C2) then // ret
+      if ((PByte(Dis.EIP)^ = $C3) or (PByte(Dis.EIP)^ = $C2)) and not IgnoreMethodBoundary then // ret
         Exit(0);
 
       Inc(NumInstr);
@@ -1573,10 +1584,14 @@ begin
     if not RPM(TextBase, CodeDump, CodeSize) then
       raise Exception.Create('DetermineIATAddress: RPM failed');
 
-    IATRef := FindCallOrJmpPtr(OEP);
+    if not FIsVMOEP then
+      IATRef := FindCallOrJmpPtr(OEP)
+    else
+      IATRef := FindCallOrJmpPtr(TextBase, True);
+
     if IATRef = 0 then
     begin
-      Log(ltInfo, 'No IAT reference found near OEP');
+      Log(ltInfo, 'No IAT reference found via reference search');
       if FGuardAddrs.Count > 0 then
       begin
         RPM(FGuardAddrs[0], @Site, 6);
@@ -1755,6 +1770,21 @@ begin
   WriteProcessMemory(FProcess.hProcess, Pointer(OEP), @RestoreBuf, Length(RestoreBuf), NumWritten);
 
   Log(ltGood, 'Correct OEP: ' + IntToHex(OEP, 8));
+end;
+
+procedure TDebugger.CheckVirtualizedOEP(OEP: NativeUInt);
+var
+  Code: packed record
+    Instr: Byte;
+    Displ: UInt32;
+  end;
+begin
+  RPM(OEP, @Code, 5);
+  if (Code.Instr <> $E9) or (OEP + 5 + Code.Displ < TMSectR.Address) then
+    Exit;
+
+  FIsVMOEP := True;
+  Log(ltInfo, 'OEP is virtualized (!): jmp ' + IntToHex(OEP + 5 + Code.Displ, 8));
 end;
 
 procedure TDebugger.TraceImports(IAT: NativeUInt);
