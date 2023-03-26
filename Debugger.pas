@@ -327,31 +327,33 @@ begin
   CloseHandleAPI := GetProcAddress(GetModuleHandle(kernel32), 'CloseHandle');
   FHW1.Address := Cardinal(CloseHandleAPI);
 
-  NtSIT := GetProcAddress(GetModuleHandle('ntdll.dll'), 'ZwSetInformationThread');
-  FHW3.Address := Cardinal(NtSIT);
-  KiFastSystemCall := GetProcAddress(GetModuleHandle('ntdll.dll'), 'KiFastSystemCall');
-
-  if not (IsWow64Process(FProcess.hProcess, FWow64) and FWow64) then
-  begin
-    VirtualProtectEx(FProcess.hProcess, KiFastSystemCall, 1, PAGE_EXECUTE_READWRITE, @x);
-    Buf := $CC;
-    WriteProcessMemory(FProcess.hProcess, KiFastSystemCall, @Buf, 1, x);
-    FSoftBPs.Add(KiFastSystemCall, $8B);
-    NtQIP := PCardinal(Cardinal(GetProcAddress(GetModuleHandle('ntdll.dll'), 'ZwQueryInformationProcess')) + 1)^;
-  end
-  else
-  begin
-    NtQIP64 := GetProcAddress(GetModuleHandle('ntdll.dll'), 'ZwQueryInformationProcess');
-    FHW4.Address := Cardinal(NtQIP64);
-  end;
-
-  UpdateDR(DebugEv.CreateProcessInfo.hThread);
-
   if FileExists('InjectorCLIx86.exe') then
   begin
     Log(ltGood, 'Applying ScyllaHide');
     ShellExecute(0, 'open', 'InjectorCLIx86.exe', PChar(Format('pid:%d %s nowait', [FProcess.dwProcessId, ExtractFilePath(ParamStr(0)) + 'HookLibraryx86.dll'])), nil, SW_HIDE);
+  end
+  else
+  begin
+    NtSIT := GetProcAddress(GetModuleHandle('ntdll.dll'), 'ZwSetInformationThread');
+    FHW3.Address := Cardinal(NtSIT);
+    KiFastSystemCall := GetProcAddress(GetModuleHandle('ntdll.dll'), 'KiFastSystemCall');
+
+    if not (IsWow64Process(FProcess.hProcess, FWow64) and FWow64) then
+    begin
+      VirtualProtectEx(FProcess.hProcess, KiFastSystemCall, 1, PAGE_EXECUTE_READWRITE, @x);
+      Buf := $CC;
+      WriteProcessMemory(FProcess.hProcess, KiFastSystemCall, @Buf, 1, x);
+      FSoftBPs.Add(KiFastSystemCall, $8B);
+      NtQIP := PCardinal(Cardinal(GetProcAddress(GetModuleHandle('ntdll.dll'), 'ZwQueryInformationProcess')) + 1)^;
+    end
+    else
+    begin
+      NtQIP64 := GetProcAddress(GetModuleHandle('ntdll.dll'), 'ZwQueryInformationProcess');
+      FHW4.Address := Cardinal(NtQIP64);
+    end;
   end;
+
+  UpdateDR(DebugEv.CreateProcessInfo.hThread);
 
   //FetchMemoryRegions;
   TMInit(DebugEv.CreateProcessInfo.hFile);
