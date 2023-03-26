@@ -175,7 +175,7 @@ var
   FS: TFileStream;
   Buf: PByte;
   i: Integer;
-  Size, Delta: Cardinal;
+  Size, Delta, IATRawOffset: Cardinal;
 begin
   FS := TFileStream.Create(FileName, fmCreate);
   try
@@ -183,9 +183,11 @@ begin
     GetMem(Buf, Size);
     if not RPM(FImageBase, Buf, Size) then
       raise Exception.Create('DumpToFile RPM failed');
-    Delta := PE.TrimHugeSections(Buf);
+
+    IATRawOffset := FIAT - FImageBase;
+    // TrimHugeSections may adjust IATRawOffset depending on what is trimmed.
+    Delta := PE.TrimHugeSections(Buf, IATRawOffset);
     Dec(Size, Delta);
-    Dec(FIAT, Delta);
     FS.Write(Buf^, Size);
     FreeMem(Buf);
 
@@ -204,7 +206,7 @@ begin
 
     PE.SaveToStream(FS);
 
-    FS.Seek(FIAT - FImageBase, soBeginning);
+    FS.Seek(IATRawOffset, soBeginning);
     FS.Write(FIATImage^, FIATImageSize);
   finally
     FS.Free;

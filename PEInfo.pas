@@ -33,7 +33,7 @@ type
 
     function ConvertOffsetToRVAVector(Offset: NativeUInt): NativeUInt;
 
-    function TrimHugeSections(Buf: PByte): Cardinal;
+    function TrimHugeSections(Buf: PByte; var IATRawAddr: Cardinal): Cardinal;
     procedure Sanitize;
 
     procedure SaveToStream(S: TStream);
@@ -41,12 +41,13 @@ type
     property Sections: TPESections read FSections;
 
     property LFANew: Cardinal read FLFANew;
-    //property ImageBase: Cardinal read NTHeaders.OptionalHeader.ImageBase;
     property DumpSize: Cardinal read FDumpSize;
     property SizeOfImage: Cardinal read NTHeaders.OptionalHeader.SizeOfImage;
   end;
 
 implementation
+
+uses Unit2, Utils;
 
 { TPEHeader }
 
@@ -83,9 +84,8 @@ begin
   begin
     Misc.VirtualSize := Size;
     VirtualAddress := Prev.VirtualAddress + Prev.Misc.VirtualSize;
-    if (VirtualAddress and $FFF) <> 0 then
-      VirtualAddress := (VirtualAddress + $1000) and (not $FFF);
-    PointerToRawData := Prev.PointerToRawData + Prev.SizeOfRawData;
+    SectionAlign(VirtualAddress);
+    PointerToRawData := NTHeaders.OptionalHeader.SizeOfImage;
     SizeOfRawData := Size;
     Characteristics := IMAGE_SCN_MEM_READ or IMAGE_SCN_CNT_INITIALIZED_DATA;
   end;
@@ -166,7 +166,7 @@ begin
   FreeMem(LulzMem);
 end;
 
-function TPEHeader.TrimHugeSections(Buf: PByte): Cardinal;
+function TPEHeader.TrimHugeSections(Buf: PByte; var IATRawAddr: Cardinal): Cardinal;
 var
   i, j, ZeroStart: Integer;
   SectionStart, OldSectionSize, NewSectionSize, Delta: Cardinal;
@@ -191,16 +191,20 @@ begin
 
       NewSectionSize := ZeroStart;
       FileAlign(NewSectionSize);
-      //Log(ltInfo, 'Reducing ' + PAnsiChar(@FSections[i].Header.Name) + Format('ZeroStart: %X, NewSectionSize: %X, OldSize: %X', [ZeroStart, NewSectionSize, OldSectionSize]));
+      Log(ltInfo, Format('Reducing size of section [%s]: %X -> %X', [Copy(AnsiString(PAnsiChar(@FSections[i].Header.Name)), 1, 8), OldSectionSize, NewSectionSize]));
       Delta := OldSectionSize - NewSectionSize;
       Inc(Result, Delta);
       FSections[i].Header.SizeOfRawData := NewSectionSize;
+
       if i < High(FSections) then
       begin
         Move(Buf[FSections[i + 1].Header.PointerToRawData], Buf[SectionStart + NewSectionSize], FDumpSize - SectionStart - OldSectionSize);
         for j := i + 1 to High(FSections) do
           Dec(FSections[j].Header.PointerToRawData, Delta);
       end;
+
+      if IATRawAddr >= SectionStart + OldSectionSize then
+        Dec(IATRawAddr, Delta);
     end;
   end;
 end;

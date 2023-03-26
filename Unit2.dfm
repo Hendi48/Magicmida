@@ -43,8 +43,13 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
     Top = 0
     Width = 139
     Height = 24
+    Hint = 
+      'Strips all Themida sections from the binary. Only works if absol' +
+      'utely no VM references are left!'
     Align = alRight
     Caption = 'Shrink (after unvirtualizing)'
+    ParentShowHint = False
+    ShowHint = True
     TabOrder = 2
     OnClick = btnShrinkClick
   end
@@ -53,8 +58,11 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
     Top = 0
     Width = 94
     Height = 24
+    Hint = 'Special function for specific targets'
     Align = alLeft
     Caption = 'MakeDataSects'
+    ParentShowHint = False
+    ShowHint = True
     TabOrder = 3
     OnClick = btnMakeDataSectClick
   end
@@ -63,8 +71,11 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
     Top = 0
     Width = 80
     Height = 24
+    Hint = 'For dumping process after using OreansUnvirtualizer'
     Align = alRight
     Caption = 'Dump process'
+    ParentShowHint = False
+    ShowHint = True
     TabOrder = 4
     OnClick = btnDumpProcessClick
   end
@@ -78,7 +89,7 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
     Left = 200
     Top = 32
     Bitmap = {
-      494C0101030008005C0010001000FFFFFFFFFF10FFFFFFFFFFFFFFFF424D3600
+      494C010103000800040010001000FFFFFFFFFF10FFFFFFFFFFFFFFFF424D3600
       0000000000003600000028000000400000001000000001002000000000000010
       0000000000000000000000000000000000000000000000000000000000000000
       0000F6EAE420DBA6898FCE8155CFCC6B35FFCF7139FFD68757CFE5AE8C8FF9ED
