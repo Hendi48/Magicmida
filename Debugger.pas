@@ -1544,7 +1544,8 @@ begin
   FHideThreadEnd := True;
   TerminateProcess(FProcess.hProcess, 0);
   Log(ltGood, 'Operation completed successfully.');
-  Log(ltGood, 'Don''t forget to MakeDataSect.');
+  if Pos('\maplesto', LowerCase(FExecutable)) <> 0 then
+    Log(ltGood, 'Don''t forget to MakeDataSect.');
 end;
 
 function TDebugger.DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
