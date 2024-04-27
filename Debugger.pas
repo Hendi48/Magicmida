@@ -41,6 +41,7 @@ type
     FMemRegions: array of TMemoryRegion;
     FSoftBPs: TDictionary<Pointer, Byte>;
     FSoftBPReenable: Cardinal;
+    FGuardWriteOnly: Boolean;
 
     // Themida
     FImageBoundary: NativeUInt;
@@ -384,7 +385,7 @@ var
   EIP: Pointer;
   hThread: THandle;
   C: TContext;
-  Buf, Buf2, BPA, OldProt, WriteBuf, InfoClass: Cardinal;
+  Buf, Buf2, BPA, OldProt, NewProt, WriteBuf, InfoClass: Cardinal;
   Resume: Boolean;
   x: NativeUInt;
   CC: Byte;
@@ -573,7 +574,11 @@ begin
     end
     else if FGuardStepping then
     begin
-      VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, OldProt);
+      if FGuardWriteOnly then
+        NewProt := PAGE_EXECUTE_READ
+      else
+        NewProt := PAGE_NOACCESS;
+      VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, NewProt, OldProt);
       FGuardStepping := False;
       Exit(DBG_CONTINUE);
     end
@@ -735,8 +740,7 @@ begin
     Log(ltGood, 'Special >> NEW << IAT Patch was written!');
   end;
 
-  // Monitor code section for write accesses (tampering with API call sites, old Themida versions only)
-  // The collected addresses are processed in FinishUnpacking/FixupAPICallSites
+  FGuardWriteOnly := False; // Trigger on execute/read/write.
   InstallCodeSectionGuard;
   Log(ltInfo, 'Please wait, call site tracing might take a while...');
 end;
@@ -1295,6 +1299,11 @@ begin
     until Res = 0;
   end;
 
+  // Monitor code section for write accesses (tampering with API call sites, old Themida versions only)
+  // The collected addresses are processed in FinishUnpacking/FixupAPICallSites
+  FGuardWriteOnly := True;
+  InstallCodeSectionGuard;
+
   SetBreakpoint(MJ_1, hwExecute);
 end;
 
@@ -1422,11 +1431,15 @@ end;
 
 procedure TDebugger.InstallCodeSectionGuard;
 var
-  OldProt: DWORD;
+  OldProt, NewProt: DWORD;
 begin
   FGuardStart := FImageBase + FPESections[0].VirtualAddress;
   FGuardEnd := FImageBase + FBaseOfData;
-  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, OldProt);
+  if FGuardWriteOnly then
+    NewProt := PAGE_EXECUTE_READ
+  else
+    NewProt := PAGE_NOACCESS;
+  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, NewProt, OldProt);
 end;
 
 function TDebugger.IsGuardedAddress(Address: NativeUInt): Boolean;
@@ -1443,7 +1456,7 @@ var
   C: TContext;
   OEP: NativeUInt;
 begin
-  //Log(ltInfo, Format('[Guard] %X', [ExcRecord.ExceptionInformation[1]]));
+  //Log(ltInfo, Format('[Guard] %X (%d)', [ExcRecord.ExceptionInformation[1], ExcRecord.ExceptionInformation[0]]));
 
   VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_EXECUTE_READWRITE, OldProt);
 
@@ -1606,7 +1619,7 @@ var
 
 var
   IATRef, Seeker, Target: NativeUInt;
-  IATData: array[0..1023] of NativeUInt;
+  IATData: array[0..2047] of NativeUInt;
   Site: array[0..5] of Byte;
   i: Integer;
 begin
@@ -1653,7 +1666,7 @@ begin
   end;
 
   // The IATRef we obtained points somewhere into the IAT area. Now we need to figure out the start of the table.
-  Seeker := IATRef - $1000;
+  Seeker := IATRef - $2000;
   RPM(Seeker, @IATData, SizeOf(IATData));
   for i := 0 to High(IATData) do
   begin
@@ -1673,7 +1686,7 @@ var
   SiteSet: TList<NativeUInt>;
   Site: array[0..5] of Byte;
   IsJmp: Boolean;
-  IATData: array[0..511] of NativeUInt;
+  IATData: array[0..2047] of NativeUInt;
   IATMap: TDictionary<NativeUInt, NativeUInt>;
 begin
   SiteSet := TList<NativeUInt>.Create;
