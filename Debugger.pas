@@ -40,6 +40,7 @@ type
     FCurrentThreadID: Cardinal;
     FMemRegions: array of TMemoryRegion;
     FSoftBPs: TDictionary<Pointer, Byte>;
+    FSoftBPReenable: Cardinal;
 
     // Themida
     FImageBoundary: NativeUInt;
@@ -47,7 +48,7 @@ type
     TMSect: PByte;
     TMSectR: TMemoryRegion;
     Base1, RepEIP, NtQIP: NativeUInt;
-    CloseHandleAPI, AllocMemAPI, KiFastSystemCall, NtSIT, NtQIP64, Cmp10000, CmpImgBase, MagicJump: Pointer;
+    CloseHandleAPI, AllocMemAPI, AllocHeapAPI, KiFastSystemCall, NtSIT, NtQIP64, Cmp10000, CmpImgBase, MagicJump: Pointer;
     BaseAccessed, NewVer, AncientVer: Boolean;
     AllocMemCounter: Integer;
     IJumper, MJ_1, MJ_2, MJ_3, MJ_4: NativeUInt;
@@ -104,6 +105,7 @@ type
     procedure SetBreakpoint(Address: NativeUInt; BType: THWBPType = hwExecute);
     function DisableBreakpoint(Address: Pointer): Boolean;
     procedure EnableBreakpoints;
+    function IsHWBreakpoint(Address: Pointer): Boolean;
     procedure ResetBreakpoint(Address: Pointer);
     procedure UpdateDR(hThread: THandle);
 
@@ -385,6 +387,7 @@ var
   Buf, Buf2, BPA, OldProt, WriteBuf, InfoClass: Cardinal;
   Resume: Boolean;
   x: NativeUInt;
+  CC: Byte;
 begin
   Resume := False;
   Result := DBG_EXCEPTION_NOT_HANDLED;
@@ -465,6 +468,14 @@ begin
   begin
     ResetBreakpoint(Pointer(MJ_1));
     TMIATFix5(C.Eax);
+    Resume := True;
+  end
+  else if EIP = AllocHeapAPI then
+  begin
+    Log(ltFatal, 'Special IAT fix failed, perhaps not needed for this binary');
+    ResetBreakpoint(AllocHeapAPI);
+    SoftBPClear;
+    InstallCodeSectionGuard;
     Resume := True;
   end
   else if EIP = NtSIT then
@@ -551,6 +562,13 @@ begin
         Log(ltInfo, Format('Accessed %x from %p', [BPA, EIP]));
       end;
 
+      Exit(DBG_CONTINUE);
+    end
+    else if FSoftBPReenable <> 0 then
+    begin
+      CC := $CC;
+      WriteProcessMemory(FProcess.hProcess, PByte(FSoftBPReenable), @CC, 1, x);
+      FSoftBPReenable := 0;
       Exit(DBG_CONTINUE);
     end
     else if FGuardStepping then
@@ -643,12 +661,25 @@ begin
 
   if not NewVer then
   begin
-    SoftBPClear;
-
     mU32 := GetModuleHandle(user32);
     mA32 := GetModuleHandle(advapi32);
     if (C.Eax <> mK32) and (C.Eax <> mU32) and (C.Eax <> mA32) then
-      raise Exception.Create('Expected module address in eax, got ' + IntToHex(C.Eax, 8));
+    begin
+      // Rare path in certain weird binaries.
+      Log(ltInfo, Format('eax: %.8X', [C.Eax]));
+      if not IsHWBreakpoint(AllocHeapAPI) then
+        SetBreakpoint(Cardinal(AllocHeapAPI), hwExecute);
+      // Restore original byte and single step.
+      FSoftBPReenable := C.Eip;
+      B := FSoftBPs[EIP];
+      WriteProcessMemory(FProcess.hProcess, EIP, @B, 1, x);
+      FlushInstructionCache(FProcess.hProcess, EIP, 1);
+      C.EFlags := C.EFlags or $100;
+      SetThreadContext(hThread, C);
+      Exit; // DBG_CONTINUE
+    end;
+
+    SoftBPClear;
 
     Jumper := 5 + C.Eip + PCardinal(TMSect + C.Eip + 1 - TMSectR.Address)^;
 
@@ -952,6 +983,12 @@ begin
     UpdateDR(T);
 end;
 
+function TDebugger.IsHWBreakpoint(Address: Pointer): Boolean;
+begin
+  Result := (Pointer(FHW1.Address) = Address) or (Pointer(FHW2.Address) = Address) or
+            (Pointer(FHW3.Address) = Address) or (Pointer(FHW4.Address) = Address);
+end;
+
 function TDebugger.RPM(Address: NativeUInt; Buf: Pointer; BufSize: NativeUInt): Boolean;
 begin
   Result := ReadProcessMemory(FProcess.hProcess, Pointer(Address), Buf, BufSize, BufSize);
@@ -1021,6 +1058,7 @@ begin
   FreeMem(BufB);
 
   AllocMemAPI := GetProcAddress(GetModuleHandle('ntdll.dll'), 'ZwAllocateVirtualMemory');
+  AllocHeapAPI := GetProcAddress(GetModuleHandle('ntdll.dll'), 'RtlAllocateHeap');
 end;
 
 procedure TDebugger.SelectThemidaSection(EIP: NativeUInt);
