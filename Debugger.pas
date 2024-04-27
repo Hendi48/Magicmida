@@ -506,7 +506,8 @@ begin
   end
   else
   begin
-    if ((C.Dr6 shr 14) and 1) = 0 then // Bit 14: Single-step execution mode
+    // Check if Single-step execution mode (bit 14)
+    if (((C.Dr6 shr 14) and 1) = 0) and (FHW1.IsSet or FHW2.IsSet or FHW3.IsSet or FHW4.IsSet) then
     begin
       BPA := 0;
       case C.Dr6 and $F of
