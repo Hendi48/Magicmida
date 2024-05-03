@@ -4,7 +4,8 @@ interface
 
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics,
-  Controls, Forms, Dialogs, StdCtrls, Debugger, ComCtrls, ImgList, Utils, System.ImageList;
+  Controls, Forms, Dialogs, StdCtrls, Debugger, ComCtrls, ImgList, Utils, System.ImageList,
+  Vcl.Menus;
 
 type
   TThemidaUnpackerWnd = class(TForm)
@@ -13,12 +14,14 @@ type
     LV: TListView;
     ImageList1: TImageList;
     btnShrink: TButton;
-    btnMakeDataSect: TButton;
     btnDumpProcess: TButton;
+    cbDataSections: TCheckBox;
+    pmSections: TPopupMenu;
+    miCreateSectionsNow: TMenuItem;
     procedure btnDumpProcessClick(Sender: TObject);
     procedure btnUnpackClick(Sender: TObject);
     procedure btnShrinkClick(Sender: TObject);
-    procedure btnMakeDataSectClick(Sender: TObject);
+    procedure miCreateSectionsNowClick(Sender: TObject);
   private
     procedure Log(MsgType: TLogMsgType; const Msg: string);
   end;
@@ -43,7 +46,7 @@ procedure TThemidaUnpackerWnd.btnUnpackClick(Sender: TObject);
 begin
   if OD.Execute then
   begin
-    TDebugger.Create(OD.FileName, '', Log).FreeOnTerminate := True;
+    TDebugger.Create(OD.FileName, '', cbDataSections.Checked, Log).FreeOnTerminate := True;
   end;
 end;
 
@@ -52,12 +55,12 @@ begin
   if OD.Execute then
     with TPatcher.Create(OD.FileName) do
     begin
-      Process();
+      ProcessShrink();
       Free;
     end;
 end;
 
-procedure TThemidaUnpackerWnd.btnMakeDataSectClick(Sender: TObject);
+procedure TThemidaUnpackerWnd.miCreateSectionsNowClick(Sender: TObject);
 begin
   if OD.Execute then
     with TPatcher.Create(OD.FileName) do

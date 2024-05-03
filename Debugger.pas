@@ -29,6 +29,7 @@ type
   TDebugger = class(TThread)
   private
     FExecutable, FParameters: string;
+    FCreateDataSections: Boolean;
     FProcess: TProcessInformation;
     FImageBase, FBaseOfData: NativeUInt;
     FPESections: array of TImageSectionHeader;
@@ -114,7 +115,7 @@ type
   protected
     procedure Execute; override;
   public
-    constructor Create(const AExecutable, AParameters: string; ALog: TLogProc);
+    constructor Create(const AExecutable, AParameters: string; ACreateData: Boolean; ALog: TLogProc);
     destructor Destroy; override;
   end;
 
@@ -124,10 +125,11 @@ uses BeaEngineDelphi32, ShellAPI, Tracer, AntiDumpFix;
 
 { TDebugger }
 
-constructor TDebugger.Create(const AExecutable, AParameters: string; ALog: TLogProc);
+constructor TDebugger.Create(const AExecutable, AParameters: string; ACreateData: Boolean; ALog: TLogProc);
 begin
   FExecutable := AExecutable;
   FParameters := AParameters;
+  FCreateDataSections := ACreateData;
   Log := ALog;
 
   FThreads := TDictionary<Cardinal, THandle>.Create(32);
@@ -1543,9 +1545,16 @@ begin
 
   FHideThreadEnd := True;
   TerminateProcess(FProcess.hProcess, 0);
+
+  if FCreateDataSections then
+    with TPatcher.Create(FN) do
+      try
+        ProcessMkData;
+      finally
+        Free;
+      end;
+
   Log(ltGood, 'Operation completed successfully.');
-  if Pos('\maplesto', LowerCase(FExecutable)) <> 0 then
-    Log(ltGood, 'Don''t forget to MakeDataSect.');
 end;
 
 function TDebugger.DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;

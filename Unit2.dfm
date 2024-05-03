@@ -10,8 +10,6 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
   Font.Height = -11
   Font.Name = 'Tahoma'
   Font.Style = []
-  OldCreateOrder = False
-  PixelsPerInch = 96
   TextHeight = 13
   object btnUnpack: TButton
     Left = 0
@@ -37,6 +35,8 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
     SmallImages = ImageList1
     TabOrder = 1
     ViewStyle = vsReport
+    ExplicitWidth = 631
+    ExplicitHeight = 275
   end
   object btnShrink: TButton
     Left = 496
@@ -52,19 +52,7 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
     ShowHint = True
     TabOrder = 2
     OnClick = btnShrinkClick
-  end
-  object btnMakeDataSect: TButton
-    Left = 94
-    Top = 0
-    Width = 94
-    Height = 24
-    Hint = 'Special function for specific targets'
-    Align = alLeft
-    Caption = 'MakeDataSects'
-    ParentShowHint = False
-    ShowHint = True
-    TabOrder = 3
-    OnClick = btnMakeDataSectClick
+    ExplicitLeft = 492
   end
   object btnDumpProcess: TButton
     Left = 416
@@ -76,8 +64,25 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
     Caption = 'Dump process'
     ParentShowHint = False
     ShowHint = True
-    TabOrder = 4
+    TabOrder = 3
     OnClick = btnDumpProcessClick
+    ExplicitLeft = 412
+  end
+  object cbDataSections: TCheckBox
+    Left = 112
+    Top = 3
+    Width = 176
+    Height = 17
+    Hint = 
+      'Attempt to split Themida merged sections. This is vital for MSVC' +
+      ' applications utilizing Thread Local Storage.'
+    Caption = 'Auto create data sections'
+    Checked = True
+    ParentShowHint = False
+    PopupMenu = pmSections
+    ShowHint = True
+    State = cbChecked
+    TabOrder = 4
   end
   object OD: TOpenDialog
     Filter = 'Application|*.exe|Nexshit|*.aes'
@@ -227,5 +232,13 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
       0000000000010000000080010001000080018001800100008001C00380030000
       C003F00780030000F00FFC3FFFFF000000000000000000000000000000000000
       000000000000}
+  end
+  object pmSections: TPopupMenu
+    Left = 291
+    Top = 33
+    object miCreateSectionsNow: TMenuItem
+      Caption = 'Create now'
+      OnClick = miCreateSectionsNowClick
+    end
   end
 end
