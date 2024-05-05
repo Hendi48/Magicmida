@@ -50,6 +50,7 @@ type
     // Themida
     FImageBoundary: NativeUInt;
     FBaseAccessCount: Integer;
+    FCompressed: Boolean;
     TMSect: PByte;
     TMSectR: TMemoryRegion;
     Base1, RepEIP, NtQIP: NativeUInt;
@@ -129,7 +130,7 @@ type
 
 implementation
 
-uses BeaEngineDelphi32, ShellAPI, AntiDumpFix;
+uses BeaEngineDelphi32, ShellAPI, AntiDumpFix, Math;
 
 { TDebugger }
 
@@ -418,7 +419,10 @@ begin
     if Buf < FImageBoundary then
     begin
       ResetBreakpoint(EIP);
-      SetBreakpoint(FImageBase + $1000, hwAccess);
+      if FCompressed then
+        SetBreakpoint(FImageBase + $1000, hwAccess)
+      else
+        SetBreakpoint(Cardinal(AllocMemAPI));
     end;
     Resume := True;
   end
@@ -439,7 +443,7 @@ begin
     if Buf < FImageBoundary then
     begin
       Inc(AllocMemCounter);
-      if AllocMemCounter = 4 then
+      if AllocMemCounter = IfThen(FCompressed, 4, 5) then
       begin
         ResetBreakpoint(AllocMemAPI);
         if not ThemidaV3 then
@@ -1057,6 +1061,8 @@ begin
 
   FBaseOfData := PImageNTHeaders(Buf).OptionalHeader.BaseOfData;
   FMajorLinkerVersion := PImageNTHeaders(Buf).OptionalHeader.MajorLinkerVersion;
+
+  FCompressed := FPESections[0].Misc.VirtualSize <> FPESections[0].SizeOfRawData;
 
   Base1 := Sect[0].Misc.VirtualSize;
 
