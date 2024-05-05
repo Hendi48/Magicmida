@@ -72,7 +72,7 @@ var
 begin
   Lower := LowerCase(FFileName);
   PosMS := Lower.LastIndexOf('maplestory');
-  if (PosMS > 0) and (Pos('.exe', Lower, PosMS) < PosMS + 10) then
+  if (PosMS > 0) and (Pos('.exe', Lower, PosMS) < PosMS + 10 + 10) then
     MapleCreateDataSections
   else if PE.NTHeaders.OptionalHeader.MajorLinkerVersion = 14 then // MSVC 2015+
     MSVCCreateDataSections

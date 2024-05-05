@@ -5,7 +5,9 @@ interface
 uses Windows, SysUtils, Utils;
 
 type
-  TTracePredicate = function(const C: TContext): Boolean of object;
+  TTracer = class;
+
+  TTracePredicate = function(Tracer: TTracer; var C: TContext): Boolean of object;
 
   TTracer = class
   private
@@ -106,14 +108,14 @@ begin
   if not GetThreadContext(FThreadHandle, C) then
     RaiseLastOSError;
 
-  C.EFlags := C.EFlags or $100;
-  if not SetThreadContext(FThreadHandle, C) then
-    RaiseLastOSError;
-
-  if FPredicate(C) then
+  if FPredicate(Self, C) then
     Result := DBG_CONTROL_BREAK
   else
     Result := DBG_CONTINUE;
+
+  C.EFlags := C.EFlags or $100;
+  if not SetThreadContext(FThreadHandle, C) then
+    RaiseLastOSError;
 end;
 
 end.

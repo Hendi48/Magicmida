@@ -2,7 +2,7 @@ unit Debugger;
 
 interface
 
-uses Windows, SysUtils, Classes, Utils, TlHelp32, Generics.Collections, Dumper, Patcher;
+uses Windows, SysUtils, Classes, Utils, TlHelp32, Generics.Collections, Dumper, Patcher, Tracer;
 
 type
   THWBPType = (hwExecute, hwWrite, hwReserved, hwAccess);
@@ -19,6 +19,8 @@ type
   TMemoryRegion = record
     Address: NativeUInt;
     Size: Cardinal;
+
+    function Contains(Addr: NativeUInt): Boolean;
   end;
 
   TEFLRecord = record
@@ -57,6 +59,9 @@ type
     EFLs: array[0..2] of TEFLRecord;
     ThemidaV3, FIsVMOEP: Boolean;
     FTracedAPI: NativeUInt;
+    FSleepAPI, FlstrlenAPI: NativeUInt;
+    FTraceStartSP: NativeUInt;
+    FTraceInVM: Boolean;
 
     FGuardStart, FGuardEnd: NativeUInt;
     FGuardStepping: Boolean;
@@ -101,7 +106,7 @@ type
     procedure FixupAPICallSites(IAT: NativeUInt);
     function DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
     procedure TraceImports(IAT: NativeUInt);
-    function TraceIsAtAPI(const C: TContext): Boolean;
+    function TraceIsAtAPI(Tracer: TTracer; var C: TContext): Boolean;
     procedure FinishUnpacking(OEP: NativeUInt);
 
     procedure SetBreakpoint(Address: NativeUInt; BType: THWBPType = hwExecute);
@@ -121,7 +126,7 @@ type
 
 implementation
 
-uses BeaEngineDelphi32, ShellAPI, Tracer, AntiDumpFix;
+uses BeaEngineDelphi32, ShellAPI, AntiDumpFix;
 
 { TDebugger }
 
@@ -358,6 +363,9 @@ begin
       FHW4.Address := Cardinal(NtQIP64);
     end;
   end;
+
+  FSleepAPI := NativeUInt(GetProcAddress(GetModuleHandle(kernel32), 'Sleep'));
+  FlstrlenAPI := NativeUInt(GetProcAddress(GetModuleHandle(kernel32), 'lstrlen'));
 
   UpdateDR(DebugEv.CreateProcessInfo.hThread);
 
@@ -1680,7 +1688,7 @@ begin
   RPM(Seeker, @IATData, SizeOf(IATData));
   for i := 0 to High(IATData) do
   begin
-    if not Dumper.IsAPIAddress(IATData[i]) then
+    if not Dumper.IsAPIAddress(IATData[i]) and (not ThemidaV3 or not TMSectR.Contains(IATData[i])) then
       Inc(Seeker, SizeOf(NativeUInt))
     else
       Break; // Let's hope we didn't randomly stumble upon a valid API address somewhere before the IAT.
@@ -1852,13 +1860,14 @@ end;
 procedure TDebugger.TraceImports(IAT: NativeUInt);
 var
   IATData: array[0..1023] of NativeUInt;
-  i, Consecutive0: Cardinal;
+  i, Consecutive0, OldProtect: Cardinal;
   NumWritten: NativeUInt;
-  DidReachLimit: Boolean;
+  DidSetExitProcess: Boolean;
+  Ctx: TContext;
 begin
   RPM(IAT, @IATData, SizeOf(IATData));
 
-  DidReachLimit := False;
+  DidSetExitProcess := False;
   Consecutive0 := 0;
   for i := 0 to High(IATData) do
   begin
@@ -1870,26 +1879,34 @@ begin
     end;
     Consecutive0 := 0;
 
-    if (IATData[i] >= FImageBase) and (IATData[i] < FImageBoundary) then
+    if TMSectR.Contains(IATData[i]) then
     begin
-      Log(ltInfo, 'Trace: ' + IntToHex(IATData[i], 8));
+      Log(ltInfo, Format('Trace: %.8X [%.8X]', [IATData[i], IAT + i * SizeOf(Pointer)]));
+
+      Ctx.ContextFlags := CONTEXT_CONTROL;
+      GetThreadContext(FThreads[FCurrentThreadID], Ctx);
+      FTraceStartSP := Ctx.Esp;
 
       FTracedAPI := 0;
+      FTraceInVM := False;
       with TTracer.Create(FProcess.dwProcessId, FCurrentThreadID, FThreads[FCurrentThreadID], TraceIsAtAPI, Log) do
         try
-          Trace(IATData[i], 1000);
+          // Normally a couple hundred suffice, but newer Themida v3 versions do some export directory walking...
+          Trace(IATData[i], 300000);
 
-          if LimitReached then
+          if FTraceInVM then
           begin
-            if not DidReachLimit then
+            if not DidSetExitProcess then
             begin
-              DidReachLimit := True;
+              DidSetExitProcess := True;
               // ExitProcess seems to be a special case that resolves to a VM func - we assume there is only one such case
               IATData[i] := NativeUInt(GetProcAddress(GetModuleHandle(kernel32), 'ExitProcess'));
               Log(ltInfo, 'Setting API to ExitProcess');
             end
             else
+            begin
               Log(ltFatal, 'Unable to determine IAT address for ' + IntToHex(IAT + i * SizeOf(NativeUInt), 8));
+            end;
           end
           else if FTracedAPI <> 0 then
           begin
@@ -1909,12 +1926,42 @@ begin
     end;
   end;
 
-  WriteProcessMemory(FProcess.hProcess, Pointer(IAT), @IATData, SizeOf(IATData), NumWritten);
+  VirtualProtectEx(FProcess.hProcess, Pointer(IAT), SizeOf(IATData), PAGE_READWRITE, OldProtect);
+  if not WriteProcessMemory(FProcess.hProcess, Pointer(IAT), @IATData, SizeOf(IATData), NumWritten) then
+    RaiseLastOSError;
 end;
 
-function TDebugger.TraceIsAtAPI(const C: TContext): Boolean;
+function TDebugger.TraceIsAtAPI(Tracer: TTracer; var C: TContext): Boolean;
+var
+  ReturnAddr, InsnData: Cardinal;
 begin
-  Result := (C.Eip < TMSectR.Address) or (C.Eip > TMSectR.Address + TMSectR.Size);
+  if (Tracer.Counter > 100) and (Tracer.Counter < 5000) then
+  begin
+    RPM(C.Eip, @InsnData, 4);
+    if InsnData = $4CB10FF0 then // First 4 bytes of "lock cmpxchg [ebp+ebx+0], ecx"
+    begin
+      FTraceInVM := True;
+      Log(ltInfo, 'Trace ran into Themida VM, stopping');
+      Exit(True); // Stop
+    end;
+  end;
+
+  // cat & mouse game with fake calls
+  if (C.Esp < FTraceStartSP) and ((C.Eip = FSleepAPI) or (C.Eip = FlstrlenAPI)) then
+  begin
+    // It'd be better to just execute them, but the tracer currently faults at far jumps for wow64 syscalls.
+    Log(ltInfo, Format('Skipping anti-trace API at %.8x', [C.Eip]));
+    RPM(C.Esp, @ReturnAddr, 4);
+    Inc(C.Esp, 8);
+    C.Eip := ReturnAddr;
+  end;
+
+  Result := not TMSectR.Contains(C.Eip);
+  if Result and (C.Esp < FTraceStartSP) then
+  begin
+    Log(ltInfo, Format('Warning: Might have encountered new fake API at %.8x', [C.Eip]));
+    Result := False;
+  end;
 
   if Result then
     FTracedAPI := C.Eip;
@@ -1931,6 +1978,13 @@ end;
 function TBreakpoint.IsSet: Boolean;
 begin
   Result := not Disabled and (Address > 0);
+end;
+
+{ TMemoryRegion }
+
+function TMemoryRegion.Contains(Addr: NativeUInt): Boolean;
+begin
+  Result := (Addr >= Address) and (Addr < Address + Size);
 end;
 
 end.
