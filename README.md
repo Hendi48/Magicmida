@@ -1,6 +1,6 @@
 # Magicmida
 
-Magicmida is a Themida auto-unpacker that works on some 32-bit applications. It works on all versions of Windows (XP and later).
+Magicmida is a Themida auto-unpacker that works on some 32-bit applications. Recent releases require Windows Vista or later. Some very old targets from 2008-2009 might only run on Windows XP - the last release supporting that is [2023-01-14](https://github.com/Hendi48/Magicmida/releases/tag/2023-01-14).
 
 Functions:
 * Unpack: Unpacks the binary you select. The unpacked binary will be saved with an `U` suffix.
