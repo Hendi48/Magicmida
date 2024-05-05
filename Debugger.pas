@@ -35,6 +35,7 @@ type
     FProcess: TProcessInformation;
     FImageBase, FBaseOfData: NativeUInt;
     FPESections: array of TImageSectionHeader;
+    FMajorLinkerVersion: Byte;
     FHideThreadEnd: Boolean;
     FWow64: LongBool;
     Log: TLogProc;
@@ -103,6 +104,8 @@ type
 
     procedure RestoreStolenOEPForMSVC6(hThread: THandle; var OEP: NativeUInt);
     procedure CheckVirtualizedOEP(OEP: NativeUInt);
+    function TryFindCorrectOEP(OEP: NativeUInt): NativeUInt;
+    function IsTMExceptionHandler(Address: NativeUInt): Boolean;
     procedure FixupAPICallSites(IAT: NativeUInt);
     function DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
     procedure TraceImports(IAT: NativeUInt);
@@ -1052,6 +1055,7 @@ begin
     FPESections[x] := Sect[x];
 
   FBaseOfData := PImageNTHeaders(Buf).OptionalHeader.BaseOfData;
+  FMajorLinkerVersion := PImageNTHeaders(Buf).OptionalHeader.MajorLinkerVersion;
 
   Base1 := Sect[0].Misc.VirtualSize;
 
@@ -1439,6 +1443,21 @@ begin
   FSoftBPs.Clear;
 end;
 
+function TDebugger.IsTMExceptionHandler(Address: NativeUInt): Boolean;
+var
+  Data: array[0..63] of Byte;
+  i: Integer;
+begin
+  // Sometimes the "return" address at OEP is just some exception handler and not a VM continuation.
+  RPM(Address, @Data, 64);
+
+  for i := 0 to High(Data) - 4 do
+    if PCardinal(@Data[i])^ = $00B8838B then // mov eax, [ebx+CONTEXT._Eip]
+      Exit(True);
+
+  Result := False;
+end;
+
 procedure TDebugger.InstallCodeSectionGuard;
 var
   OldProt, NewProt: DWORD;
@@ -1462,7 +1481,7 @@ end;
 
 function TDebugger.ProcessGuardedAccess(hThread: THandle; var ExcRecord: TExceptionRecord): Cardinal;
 var
-  OldProt: Cardinal;
+  OldProt, RetAddr: Cardinal;
   C: TContext;
   OEP: NativeUInt;
 begin
@@ -1488,6 +1507,20 @@ begin
 
     RestoreStolenOEPForMSVC6(hThread, OEP);
     CheckVirtualizedOEP(OEP);
+
+    // Check if virtualized and stolen (goes straight into VM without using jmp in .text).
+    C.ContextFlags := CONTEXT_CONTROL;
+    if GetThreadContext(hThread, C) then
+    begin
+      RPM(C.Esp, @RetAddr, 4);
+      if TMSectR.Contains(RetAddr) and not IsTMExceptionHandler(RetAddr) then
+      begin
+        Log(ltInfo, Format('OEP return address points into Themida section: %.8X', [RetAddr]));
+        OEP := TryFindCorrectOEP(OEP);
+      end;
+    end
+    else
+      Log(ltFatal, 'GetThreadContext failed for further OEP check');
 
     FinishUnpacking(OEP);
   end;
@@ -1855,6 +1888,42 @@ begin
 
   FIsVMOEP := True;
   Log(ltInfo, 'OEP is virtualized (!): jmp ' + IntToHex(OEP + 5 + Code.Displ, 8));
+end;
+
+function TDebugger.TryFindCorrectOEP(OEP: NativeUInt): NativeUInt;
+var
+  TextBuf: PByte;
+  TextLen: Integer;
+  i: Cardinal;
+  ScanFor: Cardinal;
+begin
+  Result := OEP;
+  if not (FMajorLinkerVersion in [9, 10, 11, 12, 14]) then
+  begin
+    Log(ltFatal, 'Don''t know what to do about OEP for this compiler. Your target likely won''t run.');
+    Exit;
+  end;
+
+  // MSVC: Assume current (wrong) OEP is at __security_init_cookie.
+  // Scan for call __security_init_cookie; jmp __scrt_common_main_seh
+  TextLen := FBaseOfData - FPESections[0].VirtualAddress;
+  GetMem(TextBuf, TextLen);
+  try
+    RPM(FImageBase + FPESections[0].VirtualAddress, TextBuf, TextLen);
+
+    ScanFor := OEP - FImageBase - FPESections[0].VirtualAddress;
+    for i := 0 to TextLen - 10 do
+      if (TextBuf[i] = $E8) and (TextBuf[i + 5] = $E9) and (PCardinal(@TextBuf[i + 1])^ + i + 5 = ScanFor) then
+      begin
+        OEP := FImageBase + FPESections[0].VirtualAddress + i;
+        Log(ltGood, Format('Found likely real OEP %.8X', [OEP]));
+        Exit(OEP);
+      end;
+
+    Log(ltFatal, 'Real OEP not found. Your target likely won''t run.');
+  finally
+    FreeMem(TextBuf);
+  end;
 end;
 
 procedure TDebugger.TraceImports(IAT: NativeUInt);
