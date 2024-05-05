@@ -489,6 +489,7 @@ begin
     Log(ltFatal, 'Special IAT fix failed, perhaps not needed for this binary');
     ResetBreakpoint(AllocHeapAPI);
     SoftBPClear;
+    FGuardWriteOnly := False;
     InstallCodeSectionGuard;
     Resume := True;
   end
