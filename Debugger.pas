@@ -1935,8 +1935,8 @@ end;
 
 procedure TDebugger.TraceImports(IAT: NativeUInt);
 var
-  IATData: array[0..1023] of NativeUInt;
-  i, Consecutive0, OldProtect: Cardinal;
+  IATData: array[0..(MAX_IAT_SIZE div 4) - 1] of NativeUInt;
+  i, OldProtect: Cardinal;
   NumWritten: NativeUInt;
   DidSetExitProcess: Boolean;
   Ctx: TContext;
@@ -1944,17 +1944,8 @@ begin
   RPM(IAT, @IATData, SizeOf(IATData));
 
   DidSetExitProcess := False;
-  Consecutive0 := 0;
   for i := 0 to High(IATData) do
   begin
-    if IATData[i] = 0 then
-    begin
-      Inc(Consecutive0);
-      if Consecutive0 = 3 then  // This may vary
-        Break;
-    end;
-    Consecutive0 := 0;
-
     if TMSectR.Contains(IATData[i]) then
     begin
       Log(ltInfo, Format('Trace: %.8X [%.8X]', [IATData[i], IAT + i * SizeOf(Pointer)]));

@@ -273,7 +273,7 @@ begin
   NeedNewThunk := False; // whether there's an address "gap" (example: k32-api, 0, k32-api)
   for i := 0 to IATSize div SizeOf(Pointer) - 1 do
   begin
-    //Log(ltInfo, IntToHex(UIntPtr(a), 8) + ' -> ' + IntToHex(UIntPtr(a^), 8));
+    //Log(ltInfo, IntToHex(UIntPtr(a) - UIntPtr(IAT) + FIAT, 8) + ' -> ' + IntToHex(UIntPtr(a^), 8));
     // Type 2: a^ is correct for export lookup, but need to look in different module! (ntdll --> user32)
     if FForwardsType2.TryGetValue(a^, Fwd) then
     begin
