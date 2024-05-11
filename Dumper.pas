@@ -36,6 +36,8 @@ type
     FForwardsType2: TForwardDict; // Key: NTDLL, Value: user32 (points to fwd-string)
     FForwardsOle32: TForwardDict; // Key: combase, Value: ole32
     FForwardsNetapi32: TForwardDict; // Key: netutils, Value: netapi32
+    FForwardsCrypt32: TForwardDict; // Key: DPAPI, Value: crypt32
+    FForwardsDbghelp: TForwardDict; // Key: dbgcore, Value: dbghelp
     FAllModules: TDictionary<string, PRemoteModule>;
     FIATImage: PByte;
     FIATImageSize: Cardinal;
@@ -84,6 +86,8 @@ begin
   FForwardsType2 := TForwardDict.Create(16);
   FForwardsOle32 := TForwardDict.Create(32);
   FForwardsNetapi32 := TForwardDict.Create(32);
+  FForwardsCrypt32 := TForwardDict.Create(16);
+  FForwardsDbghelp := TForwardDict.Create(16);
   CollectNTFwd;
 end;
 
@@ -95,6 +99,8 @@ begin
   FForwardsType2.Free;
   FForwardsOle32.Free;
   FForwardsNetapi32.Free;
+  FForwardsCrypt32.Free;
+  FForwardsDbghelp.Free;
 
   if FAllModules <> nil then
   begin
@@ -120,17 +126,30 @@ end;
 
 procedure TDumper.CollectNTFwd;
 var
-  hNetapi, hSrvcli: HMODULE;
+  hNetapi, hSrvcli, hCrypt32, hDpapi, hDbghelp, hDbgcore: HMODULE;
 begin
   CollectForwards(FForwards, GetModuleHandle(kernel32), 0);
   if FHUsr <> 0 then
     CollectForwards(FForwardsType2, GetModuleHandle(user32), FHUsr);
   CollectForwards(FForwardsOle32, GetModuleHandle('ole32.dll'), 0);
+
   hNetapi := LoadLibrary('netapi32.dll');
-  hSrvcli := LoadLibrary('srvcli.dll');
+  hSrvcli := LoadLibrary('srvcli.dll'); // Required for CollectForwards
   CollectForwards(FForwardsNetapi32, hNetapi, 0);
   FreeLibrary(hSrvcli);
   FreeLibrary(hNetapi);
+
+  hCrypt32 := LoadLibrary('crypt32.dll');
+  hDpapi := LoadLibrary('dpapi.dll'); // Required for CollectForwards
+  CollectForwards(FForwardsCrypt32, hCrypt32, 0);
+  FreeLibrary(hCrypt32);
+  FreeLibrary(hDpapi);
+
+  hDbghelp := LoadLibrary('dbghelp.dll');
+  hDbgcore := LoadLibrary('dbgcore.dll'); // Required for CollectForwards
+  CollectForwards(FForwardsDbghelp, hDbghelp, 0);
+  FreeLibrary(hDbghelp);
+  FreeLibrary(hDbgcore);
 end;
 
 procedure TDumper.CollectForwards(Fwds: TForwardDict; hModReal, hModScan: HMODULE);
@@ -287,6 +306,10 @@ begin
       else if FForwardsOle32.TryGetValue(a^, Fwd) then
         a^ := Fwd
       else if FForwardsNetapi32.TryGetValue(a^, Fwd) then
+        a^ := Fwd
+      else if FForwardsCrypt32.TryGetValue(a^, Fwd) then
+        a^ := Fwd
+      else if FForwardsDbghelp.TryGetValue(a^, Fwd) then
         a^ := Fwd;
       RangeChecker := a^;
     end;
