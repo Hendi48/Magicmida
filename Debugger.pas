@@ -38,7 +38,6 @@ type
     FMajorLinkerVersion: Byte;
     FHideThreadEnd: Boolean;
     FWow64: LongBool;
-    Log: TLogProc;
     FHW1, FHW2, FHW3, FHW4: TBreakpoint;
     FThreads: TDictionary<Cardinal, THandle>;
     FCurrentThreadID: Cardinal;
@@ -126,7 +125,7 @@ type
   protected
     procedure Execute; override;
   public
-    constructor Create(const AExecutable, AParameters: string; ACreateData: Boolean; ALog: TLogProc);
+    constructor Create(const AExecutable, AParameters: string; ACreateData: Boolean);
     destructor Destroy; override;
   end;
 
@@ -136,12 +135,11 @@ uses BeaEngineDelphi32, ShellAPI, AntiDumpFix, Math;
 
 { TDebugger }
 
-constructor TDebugger.Create(const AExecutable, AParameters: string; ACreateData: Boolean; ALog: TLogProc);
+constructor TDebugger.Create(const AExecutable, AParameters: string; ACreateData: Boolean);
 begin
   FExecutable := AExecutable;
   FParameters := AParameters;
   FCreateDataSections := ACreateData;
-  Log := ALog;
 
   FThreads := TDictionary<Cardinal, THandle>.Create(32);
   FSoftBPs := TDictionary<Pointer, Byte>.Create;

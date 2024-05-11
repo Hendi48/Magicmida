@@ -47,7 +47,7 @@ type
 
 implementation
 
-uses Unit2, Utils;
+uses Utils;
 
 { TPEHeader }
 

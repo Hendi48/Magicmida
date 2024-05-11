@@ -22,6 +22,7 @@ type
     procedure btnUnpackClick(Sender: TObject);
     procedure btnShrinkClick(Sender: TObject);
     procedure miCreateSectionsNowClick(Sender: TObject);
+    procedure FormCreate(Sender: TObject);
   private
     procedure Log(MsgType: TLogMsgType; const Msg: string);
   end;
@@ -29,24 +30,27 @@ type
 var
   ThemidaUnpackerWnd: TThemidaUnpackerWnd;
 
-procedure Log(MsgType: TLogMsgType; const Msg: string);
-
 implementation
 
 uses Patcher;
 
 {$R *.dfm}
 
-procedure Log(MsgType: TLogMsgType; const Msg: string);
+procedure GUILog(MsgType: TLogMsgType; const Msg: string);
 begin
   ThemidaUnpackerWnd.Log(MsgType, Msg);
+end;
+
+procedure TThemidaUnpackerWnd.FormCreate(Sender: TObject);
+begin
+  Utils.Log := GUILog;
 end;
 
 procedure TThemidaUnpackerWnd.btnUnpackClick(Sender: TObject);
 begin
   if OD.Execute then
   begin
-    TDebugger.Create(OD.FileName, '', cbDataSections.Checked, Log).FreeOnTerminate := True;
+    TDebugger.Create(OD.FileName, '', cbDataSections.Checked).FreeOnTerminate := True;
   end;
 end;
 

@@ -2,7 +2,7 @@ unit AntiDumpFix;
 
 interface
 
-uses Windows;
+uses Windows, Utils;
 
 type
   // This fixes only one type of anti dump, and it's not guaranteed that it'll be the type used for the OEP.
@@ -22,8 +22,6 @@ type
   end;
 
 implementation
-
-uses Unit2, Utils;
 
 { TAntiDumpFixer }
 

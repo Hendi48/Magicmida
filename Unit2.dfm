@@ -10,6 +10,7 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
   Font.Height = -11
   Font.Name = 'Tahoma'
   Font.Style = []
+  OnCreate = FormCreate
   TextHeight = 13
   object btnUnpack: TButton
     Left = 0

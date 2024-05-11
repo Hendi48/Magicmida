@@ -65,7 +65,7 @@ type
 
 implementation
 
-uses Unit2, Debugger;
+uses Debugger;
 
 { TDumper }
 

@@ -17,3 +17,8 @@ Windows sometimes decides to auto-apply compatibility patches to an executable i
 ## Anti-anti-debugging
 
 Newer versions of Themida detect hardware breakpoints. In order to deal with this, injecting ScyllaHide is supported. A suitable profile is shipped with Magicmida. You just need to download SycllaHide and put `HookLibraryx86.dll` and `InjectorCLIx86.exe` next to `Magicmida.exe`. Do not overwrite scylla_hide.ini unless you know what you're doing.
+
+## Command line usage
+
+If you'd like to automate unpacking, it's possible to invoke Magicmida as a command line application.
+To do so, pass the parameters `/unpack <filename>`.

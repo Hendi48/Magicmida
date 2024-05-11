@@ -6,7 +6,11 @@ uses Windows, SysUtils;
 
 type
   TLogMsgType = (ltInfo, ltGood, ltFatal);
-  TLogProc = procedure(MsgType: TLogMsgType; const Msg: string) of object;
+  TLogProc = procedure(MsgType: TLogMsgType; const Msg: string);
+
+var
+  /// <summary>Global log proc, must be set before doing anything!</summary>
+  Log: TLogProc;
 
 function NtQueryInformationProcess(ProcessHandle: THandle; ProcessInformationClass: DWORD;
   ProcessInformation: Pointer; ProcessInformationLength: DWORD; ReturnLength: PCardinal): Integer; stdcall; external 'ntdll.dll';

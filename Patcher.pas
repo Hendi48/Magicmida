@@ -34,7 +34,7 @@ type
 
 implementation
 
-uses Unit2, Debugger, StrUtils;
+uses Debugger, StrUtils;
 
 { TPatcher }
 
