@@ -1646,6 +1646,7 @@ var
   var
     Dis: TDisasm;
     Len: Integer;
+    ThePointer: NativeUInt;
   begin
     Result := 0;
     FillChar(Dis, SizeOf(Dis), 0);
@@ -1656,7 +1657,11 @@ var
       Len := DisasmCheck(Dis);
 
       if (PWord(Dis.EIP)^ = $15FF) or (PWord(Dis.EIP)^ = $25FF) then // call dword ptr/jmp dword ptr
-        Exit(Dis.Argument1.Memory.Displacement);
+      begin
+        // Ensure we didn't stumble upon a pointer into .text.
+        if not RPM(Dis.Argument1.Memory.Displacement, @ThePointer, SizeOf(ThePointer)) or (ThePointer > TextBase + CodeSize) then
+          Exit(Dis.Argument1.Memory.Displacement);
+      end;
 
       if (PByte(Dis.EIP)^ = $E8) and not IgnoreMethodBoundary then // call
       begin
@@ -1672,8 +1677,16 @@ var
         Exit(0);
 
       Inc(NumInstr);
-      Inc(Dis.EIP, Len);
-      Inc(Dis.VirtualAddr, Len);
+      if Len > 0 then
+      begin
+        Inc(Dis.EIP, Len);
+        Inc(Dis.VirtualAddr, Len);
+      end
+      else // better luck next time...
+      begin
+        Inc(Dis.EIP, 1);
+        Inc(Dis.VirtualAddr, 1);
+      end;
     end;
   end;
 
@@ -1710,7 +1723,7 @@ var
   IATRef, Seeker, Target: NativeUInt;
   IATData: array[0..2047] of NativeUInt;
   Site: array[0..5] of Byte;
-  i: Integer;
+  i, Consecutive0: Integer;
 begin
   // For MSVC, the IAT often resides at FImageBase + FBaseOfData
   // Other compilers such as Delphi use a dedicated .idata section, but the IAT doesn't start directly at the beginning, so some guesswork is needed
@@ -1755,17 +1768,39 @@ begin
   end;
 
   // The IATRef we obtained points somewhere into the IAT area. Now we need to figure out the start of the table.
-  Seeker := IATRef - $2000;
-  RPM(Seeker, @IATData, SizeOf(IATData));
-  for i := 0 to High(IATData) do
+  Result := 0;
+  Seeker := IATRef;
+  // Read data such that IATData[High(IATData)] is the dword at IATRef.
+  RPM(IATRef - (SizeOf(IATData) - 4), @IATData, SizeOf(IATData));
+  Consecutive0 := 0;
+  i := High(IATData);
+  while i >= 0 do
   begin
-    if not Dumper.IsAPIAddress(IATData[i]) and (not ThemidaV3 or not TMSectR.Contains(IATData[i])) then
-      Inc(Seeker, SizeOf(NativeUInt))
+    if IATData[i] = 0 then
+    begin
+      Inc(Consecutive0);
+      if Consecutive0 > 64 then // Yes there are legit executables that have almost 0x100 bytes between their thunks.
+        Break;
+    end
+    else if Dumper.IsAPIAddress(IATData[i]) or (ThemidaV3 and TMSectR.Contains(IATData[i])) then
+    begin
+      Result := Seeker;
+      Consecutive0 := 0;
+    end
     else
-      Break; // Let's hope we didn't randomly stumble upon a valid API address somewhere before the IAT.
-  end;
+    begin
+      Log(ltInfo, Format('Ending IAT start search at %X because word is %X', [Seeker, IATData[i]]));
+      Break;
+    end;
 
-  Result := Seeker;
+    Dec(i);
+    Dec(Seeker, 4);
+  end;
+  if i = -1 then
+    raise Exception.Create('IAT too big');
+
+  if Result = 0 then
+    raise Exception.Create('IAT assertion failed');
 end;
 
 procedure TDebugger.FixupAPICallSites(IAT: NativeUInt);
