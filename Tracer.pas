@@ -18,6 +18,8 @@ type
     FLimitReached: Boolean;
     Log: TLogProc;
 
+    FStartAddress: NativeUInt;
+
     function OnSingleStep(const Ev: TDebugEvent): Cardinal;
   public
     constructor Create(AProcessID, AThreadID: Cardinal; AThreadHandle: THandle;
@@ -25,6 +27,7 @@ type
 
     procedure Trace(AAddress: NativeUInt; ALimit: Cardinal);
 
+    property StartAddress: NativeUInt read FStartAddress;
     property Counter: Cardinal read FCounter;
     property LimitReached: Boolean read FLimitReached;
   end;
@@ -48,10 +51,12 @@ var
   C: TContext;
   Ev: TDebugEvent;
   Status: Cardinal;
+  hThread: THandle;
 begin
   FCounter := 0;
   FLimit := ALimit;
   FLimitReached := False;
+  FStartAddress := AAddress;
 
   C.ContextFlags := CONTEXT_CONTROL;
   if not GetThreadContext(FThreadHandle, C) then
@@ -68,6 +73,19 @@ begin
   Status := DBG_EXCEPTION_NOT_HANDLED;
   while WaitForDebugEvent(Ev, INFINITE) do
   begin
+    if Ev.dwThreadId <> FThreadID then
+    begin
+      Log(ltInfo, Format('Suspending spurious thread %d', [Ev.dwThreadId]));
+      hThread := OpenThread(2, False, Ev.dwThreadId); // THREAD_SUSPEND_RESUME
+      if hThread <> INVALID_HANDLE_VALUE then
+      begin
+        SuspendThread(hThread);
+        CloseHandle(hThread);
+      end;
+      ContinueDebugEvent(Ev.dwProcessId, Ev.dwThreadId, DBG_CONTINUE);
+      Continue;
+    end;
+
     case Ev.dwDebugEventCode of
       EXCEPTION_DEBUG_EVENT:
       begin
@@ -79,7 +97,7 @@ begin
         end
         else
         begin
-          Log(ltFatal, 'Unexpected exception during tracing: ' + IntToHex(Ev.Exception.ExceptionRecord.ExceptionCode, 8));
+          Log(ltFatal, Format('Unexpected exception during tracing: %.8X at %p in thread %d', [Ev.Exception.ExceptionRecord.ExceptionCode, Ev.Exception.ExceptionRecord.ExceptionAddress, Ev.dwThreadId]));
           Exit;
         end;
       end;
