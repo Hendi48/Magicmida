@@ -66,8 +66,10 @@ type
     FTraceInVM: Boolean;
 
     FGuardStart, FGuardEnd: NativeUInt;
-    FGuardStepping: Boolean;
+    FGuardStepping, FTMGuard: Boolean;
     FGuardAddrs: TList<NativeUInt>;
+
+    FTLSCounter, FTLSTotal: Integer;
 
     function PEExecute: Boolean;
 
@@ -1037,6 +1039,8 @@ var
   x: Cardinal;
   Sect: PImageSectionHeader;
   w: NativeUInt;
+  TLSDir: TImageTLSDirectory32;
+  TLSDist: IntPtr;
 begin
   if (hPE = 0) or (hPE = INVALID_HANDLE_VALUE) then
   begin
@@ -1073,12 +1077,24 @@ begin
   if not WriteProcessMemory(FProcess.hProcess, Test, @x, 1, w) then
     raise Exception.CreateFmt('Fixing PE header antidump failed! Code: %d', [GetLastError]);
 
-  //y := Sect[2].Misc.VirtualSize;
-  //if (y = 0) or (y > 4 * 1024 * 1024) then
-  //  raise Exception.CreateFmt('Unexpected 3rd section size: %d', [Sect[2].Misc.VirtualSize]);
-
   FImageBoundary := PImageNTHeaders(Buf)^.OptionalHeader.SizeOfImage + FImageBase;
   Log(ltInfo, Format('Image boundary: %.8X', [FImageBoundary]));
+
+  if PImageNTHeaders(Buf).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size > 0 then
+  begin
+    with PImageNTHeaders(Buf).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS] do
+      if RPM(FImageBase + VirtualAddress, @TLSDir, Min(Size, SizeOf(TLSDir))) then
+      begin
+        // NOTE: This might be an MSVC-ism, where we assume the TLS callback pointers are located right
+        // after the indexes. This allows us to determine the amount of callbacks.
+        TLSDist := TLSDir.AddressOfCallBacks - TLSDir.AddressOfIndex;
+        if (TLSDist > 0) and (TLSDist <= 4 * 4) then // Assume at most 4 TLS entries
+        begin
+          FTLSTotal := TLSDist div 4;
+          Log(ltInfo, Format('Expecting %d TLS entries', [FTLSTotal]));
+        end;
+      end;
+  end;
 
   FreeMem(BufB);
 
@@ -1496,7 +1512,13 @@ begin
 
   VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_EXECUTE_READWRITE, OldProt);
 
-  if NativeUInt(ExcRecord.ExceptionAddress) > FGuardEnd then
+  if FTMGuard then
+  begin
+    // We've hit the Themida section after executing a TLS entypoint.
+    FTMGuard := False;
+    InstallCodeSectionGuard;
+  end
+  else if NativeUInt(ExcRecord.ExceptionAddress) > FGuardEnd then
   begin
     FGuardAddrs.Add(ExcRecord.ExceptionInformation[1]);
     // Single-step, then re-protect in OnHardwareBreakpoint
@@ -1506,6 +1528,15 @@ begin
       RaiseLastOSError;
     C.EFlags := C.EFlags or $100;
     SetThreadContext(hThread, C);
+  end
+  else if (ExcRecord.ExceptionInformation[0] = 8) and (FTLSTotal > 0) and (FTLSCounter < FTLSTotal) then
+  begin
+    Inc(FTLSCounter);
+    Log(ltGood, Format('TLS %d: %.8X', [FTLSCounter, UIntPtr(ExcRecord.ExceptionAddress)]));
+    FGuardStart := TMSectR.Address;
+    FGuardEnd := TMSectR.Address + TMSectR.Size;
+    FTMGuard := True;
+    VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, OldProt);
   end
   else
   begin
