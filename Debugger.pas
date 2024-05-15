@@ -870,6 +870,14 @@ begin
   WriteProcessMemory(FProcess.hProcess, EIP, Buf, 5, x);
   FlushInstructionCache(FProcess.hProcess, EIP, 5);
 
+  // Check if there's a jz/jnz that became invalid due to the hook and fix it
+  RPM(Cardinal(EIP) - 3 - 6, @bs[0], 6);
+  if (bs[0] = $0F) and ((bs[1] = $84) or (bs[1] = $85)) and (PCardinal(@bs[2])^ in [4..7]) then
+  begin
+    PCardinal(@bs[2])^ := (Cardinal(HookDest) + $37 + (PCardinal(@bs[2])^ - 3)) - (Cardinal(EIP) - 3 - 6) - 6;
+    WriteProcessMemory(FProcess.hProcess, Pointer(Cardinal(EIP) - 3 - 4), @bs[2], 4, x);
+  end;
+
   // SPECIAL_IAT_PATCH_OK = 1
   Log(ltGood, 'EFL Patch at ' + IntToHex(Cardinal(EIP), 8));
 
@@ -1324,9 +1332,6 @@ begin
     end;
 
     // SP_WAS_SET = 1, SP_NEW_USE = 1
-
-    //Log(ltInfo, IntToHex(Res, 8));
-    //raise exception.Create('Fehlermeldung');
   end
   else
   begin
@@ -1669,6 +1674,7 @@ var
     while NumInstr < 200 do
     begin
       Len := DisasmCheck(Dis);
+      //Log(ltInfo, IntToHex(Dis.VirtualAddr) + ' : ' + string(AnsiString(Dis.CompleteInstr)));
 
       if (PWord(Dis.EIP)^ = $15FF) or (PWord(Dis.EIP)^ = $25FF) then // call dword ptr/jmp dword ptr
       begin
