@@ -69,7 +69,8 @@ type
     FGuardStepping, FTMGuard: Boolean;
     FGuardAddrs: TList<NativeUInt>;
 
-    FTLSCounter, FTLSTotal: Integer;
+    FTLSAddressesOfCallbacks: Cardinal;
+    FTLSCounter, FTLSTotal: Cardinal;
 
     function PEExecute: Boolean;
 
@@ -1095,6 +1096,7 @@ begin
         if (TLSDist > 0) and (TLSDist <= 4 * 4) then // Assume at most 4 TLS entries
         begin
           FTLSTotal := TLSDist div 4;
+          FTLSAddressesOfCallbacks := TLSDir.AddressOfCallBacks;
           Log(ltInfo, Format('Expecting %d TLS entries', [FTLSTotal]));
         end;
       end;
@@ -1510,6 +1512,9 @@ var
   OldProt, RetAddr: Cardinal;
   C: TContext;
   OEP: NativeUInt;
+  TLSTest: Cardinal;
+label
+  OEPReached;
 begin
   //Log(ltInfo, Format('[Guard] %X (%d)', [ExcRecord.ExceptionInformation[1], ExcRecord.ExceptionInformation[0]]));
 
@@ -1534,15 +1539,21 @@ begin
   end
   else if (ExcRecord.ExceptionInformation[0] = 8) and (FTLSTotal > 0) and (FTLSCounter < FTLSTotal) then
   begin
-    Inc(FTLSCounter);
-    Log(ltGood, Format('TLS %d: %.8X', [FTLSCounter, UIntPtr(ExcRecord.ExceptionAddress)]));
-    FGuardStart := TMSectR.Address;
-    FGuardEnd := TMSectR.Address + TMSectR.Size;
-    FTMGuard := True;
-    VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, OldProt);
+    if RPM(FTLSAddressesOfCallbacks + (FTLSCounter * 4), @TLSTest, 4) and (TLSTest = UIntPtr(ExcRecord.ExceptionAddress)) then
+    begin
+      Inc(FTLSCounter);
+      Log(ltGood, Format('TLS %d: %.8X', [FTLSCounter, UIntPtr(ExcRecord.ExceptionAddress)]));
+      FGuardStart := TMSectR.Address;
+      FGuardEnd := TMSectR.Address + TMSectR.Size;
+      FTMGuard := True;
+      VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, OldProt);
+    end
+    else
+      goto OEPReached;
   end
   else
   begin
+OEPReached:
     OEP := NativeUInt(ExcRecord.ExceptionAddress);
     Log(ltGood, 'OEP: ' + IntToHex(OEP, 8));
 
