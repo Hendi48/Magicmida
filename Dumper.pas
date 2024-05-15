@@ -267,7 +267,7 @@ begin
 
   LastValidOffset := 0;
   i := 0;
-  while i < MAX_IAT_SIZE do
+  while (i < MAX_IAT_SIZE) and ((LastValidOffset = 0) or (NativeUInt(i) < LastValidOffset + $100)) do
   begin
     if IsAPIAddress(PNativeUInt(IAT + i)^) then
       LastValidOffset := NativeUInt(i);
