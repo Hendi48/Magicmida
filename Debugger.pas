@@ -58,7 +58,7 @@ type
     AllocMemCounter: Integer;
     IJumper, MJ_1, MJ_2, MJ_3, MJ_4: NativeUInt;
     EFLs: array[0..2] of TEFLRecord;
-    ThemidaV3, FIsVMOEP: Boolean;
+    FThemidaV3, FThemidaV2BySections, FIsVMOEP: Boolean;
     FTracedAPI: NativeUInt;
     FSleepAPI, FlstrlenAPI: NativeUInt;
     FTraceStartSP: NativeUInt;
@@ -450,7 +450,7 @@ begin
       if AllocMemCounter = IfThen(FCompressed, 4, 5) then
       begin
         ResetBreakpoint(AllocMemAPI);
-        if not ThemidaV3 then
+        if not FThemidaV3 then
         begin
           Log(ltGood, 'IAT fixing started.');
           TMIATFix(Buf);
@@ -578,9 +578,9 @@ begin
             SetBreakpoint(Cardinal(AllocMemAPI), hwExecute);
             RepEIP := C.Eip;
           end
-          else if FBaseAccessCount = 3 then // hackish, but seems ok so far
+          else if (FBaseAccessCount = 3) and not FThemidaV2BySections then // hackish, but seems ok so far
           begin
-            ThemidaV3 := True;
+            FThemidaV3 := True;
             Log(ltInfo, 'Assuming Themida v3');
             SelectThemidaSection(C.Eip);
             ResetBreakpoint(Pointer(FImageBase + $1000));
@@ -1076,6 +1076,10 @@ begin
   for x := 0 to High(FPESections) do
     FPESections[x] := Sect[x];
 
+  if (FPESections[High(FPESections)].Misc.VirtualSize = $1000) and (FPESections[High(FPESections)].SizeOfRawData = $1000)
+     and (FPESections[High(FPESections) - 1].Misc.VirtualSize = $1000) then
+    FThemidaV2BySections := True;
+
   FBaseOfData := PImageNTHeaders(Buf).OptionalHeader.BaseOfData;
   FMajorLinkerVersion := PImageNTHeaders(Buf).OptionalHeader.MajorLinkerVersion;
 
@@ -1500,7 +1504,7 @@ begin
   FGuardProtection := Protection;
   VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, FGuardProtection, OldProt);
 
-  if not ThemidaV3 and not IsHWBreakpoint(VirtualProtectAPI) then
+  if not FThemidaV3 and not IsHWBreakpoint(VirtualProtectAPI) then
     SetBreakpoint(NativeUInt(VirtualProtectAPI));
 end;
 
@@ -1611,7 +1615,7 @@ begin
   Log(ltGood, 'IAT: ' + IntToHex(IAT, 8));
 
   // Themida v3: Weak traceable import protection
-  if ThemidaV3 then
+  if FThemidaV3 then
   begin
     // Import addresses are protected with a simple xor+subtraction scheme. The values are different
     // for each address slot - they're held in a big table somewhere in the TM section. The entire
@@ -1626,7 +1630,7 @@ begin
   if FGuardAddrs.Count > 0 then
     FixupAPICallSites(IAT);
 
-  if FIsVMOEP and ThemidaV3 then
+  if FIsVMOEP and FThemidaV3 then
   begin
     with TAntiDumpFixer.Create(FProcess.hProcess, FImageBase) do
     begin
@@ -1802,7 +1806,7 @@ begin
       if Consecutive0 > 64 then // Yes there are legit executables that have almost 0x100 bytes between their thunks.
         Break;
     end
-    else if Dumper.IsAPIAddress(IATData[i]) or (ThemidaV3 and TMSectR.Contains(IATData[i])) then
+    else if Dumper.IsAPIAddress(IATData[i]) or (FThemidaV3 and TMSectR.Contains(IATData[i])) then
     begin
       Result := Seeker;
       Consecutive0 := 0;
