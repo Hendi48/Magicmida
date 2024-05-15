@@ -44,7 +44,6 @@ type
     FMemRegions: array of TMemoryRegion;
     FSoftBPs: TDictionary<Pointer, Byte>;
     FSoftBPReenable: Cardinal;
-    FGuardWriteOnly: Boolean;
 
     // Themida
     FImageBoundary: NativeUInt;
@@ -53,7 +52,8 @@ type
     TMSect: PByte;
     TMSectR: TMemoryRegion;
     Base1, RepEIP, NtQIP: NativeUInt;
-    CloseHandleAPI, AllocMemAPI, AllocHeapAPI, KiFastSystemCall, NtSIT, NtQIP64, Cmp10000, CmpImgBase, MagicJump: Pointer;
+    CloseHandleAPI, AllocMemAPI, AllocHeapAPI, KiFastSystemCall, NtSIT, NtQIP64, VirtualProtectAPI: Pointer;
+    Cmp10000, CmpImgBase, MagicJump: Pointer;
     BaseAccessed, NewVer, AncientVer: Boolean;
     AllocMemCounter: Integer;
     IJumper, MJ_1, MJ_2, MJ_3, MJ_4: NativeUInt;
@@ -65,6 +65,7 @@ type
     FTraceInVM: Boolean;
 
     FGuardStart, FGuardEnd: NativeUInt;
+    FGuardProtection: Integer;
     FGuardStepping, FTMGuard: Boolean;
     FGuardAddrs: TList<NativeUInt>;
 
@@ -100,7 +101,7 @@ type
     function GetIATBPAddressNew(var Res: NativeUInt): Boolean;
     function InstallEFLPatch(EIP: Pointer; var C: TContext; var Rec: TEFLRecord): Boolean;
 
-    procedure InstallCodeSectionGuard;
+    procedure InstallCodeSectionGuard(Protection: Cardinal);
     function IsGuardedAddress(Address: NativeUInt): Boolean;
     function ProcessGuardedAccess(hThread: THandle; var ExcRecord: TExceptionRecord): Cardinal;
 
@@ -368,6 +369,8 @@ begin
     end;
   end;
 
+  VirtualProtectAPI := GetProcAddress(GetModuleHandle(kernel32), 'VirtualProtect');
+
   FSleepAPI := NativeUInt(GetProcAddress(GetModuleHandle(kernel32), 'Sleep'));
   FlstrlenAPI := NativeUInt(GetProcAddress(GetModuleHandle(kernel32), 'lstrlen'));
 
@@ -399,7 +402,7 @@ var
   EIP: Pointer;
   hThread: THandle;
   C: TContext;
-  Buf, Buf2, BPA, OldProt, NewProt, WriteBuf, InfoClass: Cardinal;
+  Buf, Buf2, BPA, OldProt, WriteBuf, InfoClass: Cardinal;
   Resume: Boolean;
   x: NativeUInt;
   CC: Byte;
@@ -452,7 +455,7 @@ begin
           TMIATFix(Buf);
         end
         else
-          InstallCodeSectionGuard;
+          InstallCodeSectionGuard(PAGE_NOACCESS);
       end;
     end;
     Resume := True;
@@ -493,8 +496,16 @@ begin
     Log(ltFatal, 'Special IAT fix failed, perhaps not needed for this binary');
     ResetBreakpoint(AllocHeapAPI);
     SoftBPClear;
-    FGuardWriteOnly := False;
-    InstallCodeSectionGuard;
+    InstallCodeSectionGuard(PAGE_NOACCESS);
+    Resume := True;
+  end
+  else if EIP = VirtualProtectAPI then
+  begin
+    {RPM(C.Esp + 4, @Buf, 4);
+    RPM(C.Esp + 8, @Buf2, 4);
+    Log(ltInfo, Format('[%d] Protect: %X %X', [FCurrentThreadId, Buf, Buf2]));}
+    // Ensure we break on execution in case it's still on PAGE_READONLY.
+    InstallCodeSectionGuard(PAGE_NOACCESS);
     Resume := True;
   end
   else if EIP = NtSIT then
@@ -592,11 +603,7 @@ begin
     end
     else if FGuardStepping then
     begin
-      if FGuardWriteOnly then
-        NewProt := PAGE_EXECUTE_READ
-      else
-        NewProt := PAGE_NOACCESS;
-      VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, NewProt, OldProt);
+      VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, FGuardProtection, OldProt);
       FGuardStepping := False;
       Exit(DBG_CONTINUE);
     end
@@ -758,8 +765,7 @@ begin
     Log(ltGood, 'Special >> NEW << IAT Patch was written!');
   end;
 
-  FGuardWriteOnly := False; // Trigger on execute/read/write.
-  InstallCodeSectionGuard;
+  InstallCodeSectionGuard(PAGE_READONLY); // Not using PAGE_NOACCESS here is a performance optimization for some targets (esp. MC1.14).
   Log(ltInfo, 'Please wait, call site tracing might take a while...');
 end;
 
@@ -1336,8 +1342,7 @@ begin
 
   // Monitor code section for write accesses (tampering with API call sites, old Themida versions only)
   // The collected addresses are processed in FinishUnpacking/FixupAPICallSites
-  FGuardWriteOnly := True;
-  InstallCodeSectionGuard;
+  InstallCodeSectionGuard(PAGE_READONLY); // Not using PAGE_NOACCESS here is a performance optimization for some targets (esp. MC1.14).
 
   SetBreakpoint(MJ_1, hwExecute);
 end;
@@ -1479,17 +1484,17 @@ begin
   Result := False;
 end;
 
-procedure TDebugger.InstallCodeSectionGuard;
+procedure TDebugger.InstallCodeSectionGuard(Protection: Cardinal);
 var
-  OldProt, NewProt: DWORD;
+  OldProt: DWORD;
 begin
   FGuardStart := FImageBase + FPESections[0].VirtualAddress;
   FGuardEnd := FImageBase + FBaseOfData;
-  if FGuardWriteOnly then
-    NewProt := PAGE_EXECUTE_READ
-  else
-    NewProt := PAGE_NOACCESS;
-  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, NewProt, OldProt);
+  FGuardProtection := Protection;
+  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, FGuardProtection, OldProt);
+
+  if not ThemidaV3 and not IsHWBreakpoint(VirtualProtectAPI) then
+    SetBreakpoint(NativeUInt(VirtualProtectAPI));
 end;
 
 function TDebugger.IsGuardedAddress(Address: NativeUInt): Boolean;
@@ -1514,7 +1519,7 @@ begin
   begin
     // We've hit the Themida section after executing a TLS entypoint.
     FTMGuard := False;
-    InstallCodeSectionGuard;
+    InstallCodeSectionGuard(FGuardProtection);
   end
   else if NativeUInt(ExcRecord.ExceptionAddress) > FGuardEnd then
   begin
