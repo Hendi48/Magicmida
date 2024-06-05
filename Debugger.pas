@@ -2059,7 +2059,7 @@ begin
       with TTracer.Create(FProcess.dwProcessId, FCurrentThreadID, FThreads[FCurrentThreadID], TraceIsAtAPI, Log) do
         try
           // Normally a couple hundred suffice, but newer Themida v3 versions do some export directory walking...
-          Trace(IATData[i], 300000);
+          Trace(IATData[i], 500000);
 
           if FTraceInVM then
           begin
