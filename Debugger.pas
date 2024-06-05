@@ -66,7 +66,7 @@ type
 
     FGuardStart, FGuardEnd: NativeUInt;
     FGuardProtection: Integer;
-    FGuardStepping, FTMGuard: Boolean;
+    FGuardStepping: Boolean;
     FGuardAddrs: TList<NativeUInt>;
 
     FTLSAddressesOfCallbacks: Cardinal;
@@ -1521,7 +1521,6 @@ var
   OldProt, RetAddr: Cardinal;
   C: TContext;
   OEP: NativeUInt;
-  TLSTest: Cardinal;
 label
   OEPReached;
 begin
@@ -1529,13 +1528,7 @@ begin
 
   VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_EXECUTE_READWRITE, OldProt);
 
-  if FTMGuard then
-  begin
-    // We've hit the Themida section after executing a TLS entypoint.
-    FTMGuard := False;
-    InstallCodeSectionGuard(FGuardProtection);
-  end
-  else if NativeUInt(ExcRecord.ExceptionAddress) > FGuardEnd then
+  if NativeUInt(ExcRecord.ExceptionAddress) > FGuardEnd then
   begin
     FGuardAddrs.Add(ExcRecord.ExceptionInformation[1]);
     // Single-step, then re-protect in OnHardwareBreakpoint
@@ -1548,17 +1541,34 @@ begin
   end
   else if (ExcRecord.ExceptionInformation[0] = 8) and (FTLSTotal > 0) and (FTLSCounter < FTLSTotal) then
   begin
-    if RPM(FTLSAddressesOfCallbacks + (FTLSCounter * 4), @TLSTest, 4) and (TLSTest = UIntPtr(ExcRecord.ExceptionAddress)) then
+    C.ContextFlags := CONTEXT_CONTROL;
+    if GetThreadContext(hThread, C) then
     begin
-      Inc(FTLSCounter);
-      Log(ltGood, Format('TLS %d: %.8X', [FTLSCounter, UIntPtr(ExcRecord.ExceptionAddress)]));
-      FGuardStart := TMSectR.Address;
-      FGuardEnd := TMSectR.Address + TMSectR.Size;
-      FTMGuard := True;
-      VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, OldProt);
+      RPM(C.Esp, @RetAddr, 4);
+      // This might cause issues if there's no actual TLS and we have a stolen virtualized OEP.
+      // Some binaries have a sane-looking TLS directory but nothing is called.
+      // Perhaps check the 3 args passed to the callback for further assurance?
+      if TMSectR.Contains(RetAddr) and not IsTMExceptionHandler(RetAddr) then
+      begin
+        Inc(FTLSCounter);
+        Log(ltGood, Format('TLS %d: %.8X', [FTLSCounter, UIntPtr(ExcRecord.ExceptionAddress)]));
+        // Skip execution, we want nothing initialized in the unpacked binary.
+        C.Eip := RetAddr;
+        Inc(C.Esp, 4 + 3*4);
+        SetThreadContext(hThread, C);
+        InstallCodeSectionGuard(FGuardProtection);
+      end
+      else
+      begin
+        Log(ltInfo, 'This doesn''t look like TLS, assuming OEP.');
+        goto OEPReached;
+      end;
     end
     else
+    begin
+      Log(ltFatal, 'GetThreadContext failed for TLS check');
       goto OEPReached;
+    end;
   end
   else
   begin
