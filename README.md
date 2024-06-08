@@ -1,6 +1,6 @@
 # Magicmida
 
-Magicmida is a Themida auto-unpacker that works on some 32-bit applications. Recent releases require Windows Vista or later. Some very old targets from 2008-2009 might only run on Windows XP - the last release supporting that is [2023-01-14](https://github.com/Hendi48/Magicmida/releases/tag/2023-01-14).
+Magicmida is a Themida auto unpacker that works on some 32-bit applications.
 
 Functions:
 * Unpack: Unpacks the binary you select. The unpacked binary will be saved with an `U` suffix.
@@ -13,6 +13,8 @@ Note: The tool focuses on cleanness of the resulting binaries. Things such as VM
 Important: Never activate any compatibility mode options for Magicmida or for the target you're unpacking. It would very likely screw up the unpacking process due to shimming.
 
 Windows sometimes decides to auto-apply compatibility patches to an executable if it crashed before. This AppCompat information is stored in the registry and is linked to the exact path of your executable. This can be a problem if you're upgrading to a newer Magicmida version that has fixes for your target. You can try moving your target to a different path or look around in the subkeys of `HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags`.
+
+Old targets from 2007-2009 often don't run on Windows 10 and require an older OS version to unpack. The unpacked binaries should then work on newer Windows versions, given that the application itself doesn't have incompatibilities.
 
 ## Anti-anti-debugging
 

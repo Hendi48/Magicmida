@@ -142,11 +142,14 @@ begin
   FreeLibrary(hSrvcli);
   FreeLibrary(hNetapi);
 
-  hCrypt32 := LoadLibrary('crypt32.dll');
-  hDpapi := LoadLibrary('dpapi.dll'); // Required for CollectForwards
-  CollectForwards(FForwardsCrypt32, hCrypt32, 0);
-  FreeLibrary(hCrypt32);
-  FreeLibrary(hDpapi);
+  if Win32MajorVersion >= 6 then
+  begin
+    hCrypt32 := LoadLibrary('crypt32.dll');
+    hDpapi := LoadLibrary('dpapi.dll'); // Required for CollectForwards
+    CollectForwards(FForwardsCrypt32, hCrypt32, 0);
+    FreeLibrary(hCrypt32);
+    FreeLibrary(hDpapi);
+  end;
 
   hDbghelp := LoadLibrary('dbghelp.dll');
   hDbgcore := LoadLibrary('dbgcore.dll'); // Required for CollectForwards
