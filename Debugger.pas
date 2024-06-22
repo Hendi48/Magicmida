@@ -53,7 +53,7 @@ type
     TMSectR: TMemoryRegion;
     Base1, RepEIP, NtQIP: NativeUInt;
     CloseHandleAPI, AllocMemAPI, AllocHeapAPI, KiFastSystemCall, NtSIT, NtQIP64, VirtualProtectAPI: Pointer;
-    Cmp10000, CmpImgBase, MagicJump: Pointer;
+    CmpImgBase, MagicJump, MagicJumpV1: Pointer;
     BaseAccessed, NewVer, AncientVer: Boolean;
     AllocMemCounter: Integer;
     IJumper, MJ_1, MJ_2, MJ_3, MJ_4: NativeUInt;
@@ -95,10 +95,11 @@ type
     procedure TMInit(var hPE: THandle);
     function TMFinderCheck(C: PContext): Boolean;
     procedure TMIATFix(EIP: NativeUInt);
-    procedure TMIATFix2(EIP: NativeUInt);
+    procedure TMIATFix2;
     procedure TMIATFix3(EIP: NativeUInt);
     procedure TMIATFix4;
     procedure TMIATFix5(Eax: NativeUInt);
+    procedure TMIATFixThemidaV1(BaseCompare1: NativeUInt);
     function GetIATBPAddressNew(var Res: NativeUInt): Boolean;
     function InstallEFLPatch(EIP: Pointer; var C: TContext; var Rec: TEFLRecord): Boolean;
 
@@ -461,19 +462,6 @@ begin
     end;
     Resume := True;
   end
-  else if EIP = Cmp10000 then
-  begin
-    if C.Eax < $10000 then
-    begin
-      Log(ltFatal, 'NON_emu_first');
-    end
-    else
-    begin
-      ResetBreakpoint(Cmp10000);
-      TMIATFix2(NativeUInt(EIP));
-    end;
-    Resume := True;
-  end
   else if EIP = CmpImgBase then
   begin
     ResetBreakpoint(CmpImgBase);
@@ -490,6 +478,12 @@ begin
   begin
     ResetBreakpoint(Pointer(MJ_1));
     TMIATFix5(C.Eax);
+    Resume := True;
+  end
+  else if EIP = MagicJumpV1 then
+  begin
+    ResetBreakpoint(MagicJumpV1);
+    TMIATFixThemidaV1(UIntPtr(MagicJumpV1));
     Resume := True;
   end
   else if EIP = AllocHeapAPI then
@@ -714,9 +708,6 @@ begin
 
     Jumper := 5 + C.Eip + PCardinal(TMSect + C.Eip + 1 - TMSectR.Address)^;
 
-    {Res := FindStaticTM('0000000000000000000000000000000000000000000000000000000000000000000000000000000000', C.Eip);
-    if Res = 0 then
-      raise Exception.Create('Free area not found');}
     Res := Cardinal(VirtualAllocEx(FProcess.hProcess, nil, 128, MEM_COMMIT, PAGE_EXECUTE_READWRITE));
     Log(ltInfo, 'IAT patch location: ' + IntTOHex(Res, 8));
 
@@ -1154,29 +1145,40 @@ procedure TDebugger.TMIATFix(EIP: NativeUInt);
 begin
   SelectThemidaSection(EIP);
 
-  TMIATFix2(0);
-  (*x := TMSectR.Address + FindStatic('3D000001000F83', TMSect, TMSectR.Size);
-  if x = TMSectR.Address then
-  begin
-    Log(ltFatal, '"cmp eax, 10000" not found');
-    Exit;
-  end;
-  Cmp10000 := Pointer(x);
-  SetBreakpoint(x, hwExecute);*)
+  TMIATFix2;
 end;
 
-procedure TDebugger.TMIATFix2(EIP: NativeUInt);
+procedure TDebugger.TMIATFix2;
 var
-  x: Cardinal;
+  CompareJumpsNew, CmpEax10000: Cardinal;
 begin
-  x := TMSectR.Address + FindDynamic('74??8B8D????????8B093B8D????????7410', TMSect, TMSectR.Size);
-  if x = TMSectR.Address then
-    TMIATFix3(EIP)
+  CompareJumpsNew := FindDynamicTM('74??8B8D????????8B093B8D????????7410');
+  if CompareJumpsNew = 0 then
+  begin
+    // Old Themida 1.x versions
+    CmpEax10000 := FindStaticTM('3D000001000F83');
+    if CmpEax10000 = 0 then
+    begin
+      Log(ltFatal, '"cmp eax, 10000" not found');
+      Exit;
+    end;
+
+    Log(ltGood, 'cmp eax, 10000 at ' + IntToHex(CmpEax10000, 8));
+
+    MagicJumpV1 := Pointer(FindDynamicTM('3B8D????????0F84????0000', CmpEax10000));
+    if MagicJumpV1 = nil then
+    begin
+      Log(ltFatal, 'First ImageBase compare jump not found');
+      Exit;
+    end;
+
+    SetBreakpoint(UIntPtr(MagicJumpV1), hwExecute);
+  end
   else
   begin
-    Log(ltGood, 'ImageBase compare jumps found at: ' + IntToHex(x, 8));
-    CmpImgBase := Pointer(x);
-    SetBreakpoint(x, hwExecute);
+    Log(ltGood, 'ImageBase compare jumps found at: ' + IntToHex(CompareJumpsNew, 8));
+    CmpImgBase := Pointer(CompareJumpsNew);
+    SetBreakpoint(CompareJumpsNew, hwExecute);
   end;
 end;
 
@@ -1372,9 +1374,47 @@ begin
   WriteProcessMemory(FProcess.hProcess, Pointer(MJ_2+2), @Buf, 6, x);
   WriteProcessMemory(FProcess.hProcess, Pointer(MJ_3+2), @Buf, 6, x);
   WriteProcessMemory(FProcess.hProcess, Pointer(MJ_4+2), @Buf, 6, x);
-  //Log(ltGood, 'Magic Jump 1 at ' + IntToHex(MJ_1, 8));
   FlushInstructionCache(FProcess.hProcess, Pointer(MJ_1), 6);
   Log(ltGood, 'IAT Jumper was found & fixed at ' + IntToHex(IJumper, 8));
+end;
+
+procedure TDebugger.TMIATFixThemidaV1(BaseCompare1: NativeUInt);
+var
+  Buf: UInt64;
+  BaseCompare2, BaseCompare3, x: NativeUInt;
+  OldProt: Cardinal;
+begin
+  BaseCompare2 := FindDynamicTM('3B8D????????0F84????0000', BaseCompare1 + 12);
+  if BaseCompare2 = 0 then
+    raise Exception.Create('[Themida 1.x] BaseCompare2 not found');
+
+  BaseCompare3 := FindDynamicTM('3B8D????????0F84????0000', BaseCompare2 + 12);
+  if BaseCompare3 = 0 then
+    raise Exception.Create('[Themida 1.x] BaseCompare3 not found');
+
+  IJumper := FindDynamicTM('3985????????0F84');
+  if IJumper = 0 then
+    raise Exception.Create('[Themida 1.x] IAT jumper not found');
+
+  Log(ltInfo, 'BC1 ' + IntToHex(BaseCompare1, 8));
+  Log(ltInfo, 'BC2 ' + IntToHex(BaseCompare2, 8));
+  Log(ltInfo, 'BC3 ' + IntToHex(BaseCompare3, 8));
+
+  // This is required so Themida doesn't end the process when BaseCompare patches are in place.
+  Buf := $E990;
+  WriteProcessMemory(FProcess.hProcess, Pointer(IJumper+6), @Buf, 2, x);
+  // These prevent IAT wrapping, which only happens for the three modules kernel32, user32 and advapi32.
+  Buf := $909090909090;
+  WriteProcessMemory(FProcess.hProcess, Pointer(BaseCompare1+6), @Buf, 6, x);
+  WriteProcessMemory(FProcess.hProcess, Pointer(BaseCompare2+6), @Buf, 6, x);
+  WriteProcessMemory(FProcess.hProcess, Pointer(BaseCompare3+6), @Buf, 6, x);
+
+  Log(ltGood, 'IAT Jumper was found & fixed at ' + IntToHex(IJumper, 8));
+
+  FGuardStart := FImageBase + FPESections[0].VirtualAddress;
+  FGuardEnd := FImageBase + $100000;
+  FGuardProtection := PAGE_NOACCESS;
+  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, FGuardProtection, OldProt);
 end;
 
 procedure TDebugger.UpdateDR(hThread: THandle);
@@ -1671,7 +1711,8 @@ end;
 
 function TDebugger.DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
 var
-  TextBase, CodeSize: NativeUInt;
+  TextBase, CodeSize, DataSize: NativeUInt;
+  DataSectionIndex: Integer;
   CodeDump: PByte;
   NumInstr: Cardinal;
 
@@ -1724,33 +1765,46 @@ var
     end;
   end;
 
-  function ScanData(ToFind: NativeUInt): NativeUInt;
+  function ScanData(ToFind: NativeUInt; ScanCode: Boolean = False): NativeUInt;
   var
-    DataSize: NativeUInt;
+    StartOffset, ScanSize: NativeUInt;
     DataSect: PByte;
     DataSectWalker, DataSectBound: PNativeUInt;
   begin
-    DataSize := FPESections[0].Misc.VirtualSize - CodeSize;
-    GetMem(DataSect, DataSize);
+    if not ScanCode then
+    begin
+      StartOffset := TextBase + CodeSize;
+      ScanSize := DataSize;
+    end
+    else
+    begin
+      StartOffset := TextBase;
+      ScanSize := CodeSize;
+    end;
+
+    GetMem(DataSect, ScanSize);
     try
-      if not RPM(TextBase + CodeSize, DataSect, DataSize) then
+      if not RPM(StartOffset, DataSect, ScanSize) then
         raise Exception.Create('DetermineIATAddress.ScanData: RPM failed');
 
       // We assume the table is machine-word aligned.
       DataSectWalker := PNativeUInt(DataSect);
-      DataSectBound := PNativeUInt(DataSect + DataSize);
+      DataSectBound := PNativeUInt(DataSect + ScanSize);
 
       while DataSectWalker < DataSectBound do
       begin
         if DataSectWalker^ = ToFind then
-          Exit(NativeUInt(PByte(DataSectWalker) - DataSect) + TextBase + CodeSize);
+          Exit(NativeUInt(PByte(DataSectWalker) - DataSect) + StartOffset);
         Inc(DataSectWalker);
       end;
     finally
       FreeMem(DataSect);
     end;
 
-    raise Exception.Create('Unable to find API in data part of section 0');
+    if ScanCode then
+      raise Exception.Create('Unable to find API in section')
+    else // Retry with first part of section in case of extreme merges (Themida V1).
+      Result := ScanData(ToFind, True);
   end;
 
 var
@@ -1762,9 +1816,18 @@ begin
   // For MSVC, the IAT often resides at FImageBase + FBaseOfData
   // Other compilers such as Delphi use a dedicated .idata section, but the IAT doesn't start directly at the beginning, so some guesswork is needed
 
+  DataSectionIndex := 0;
+  for i := 0 to High(FPESections) do
+    if FBaseOfData < FPESections[i].VirtualAddress + FPESections[i].Misc.VirtualSize then
+    begin
+      DataSectionIndex := i;
+      Break;
+    end;
+
   TextBase := FImageBase + FPESections[0].VirtualAddress;
   CodeSize := FBaseOfData - FPESections[0].VirtualAddress;
-  Log(ltInfo, Format('Text base: %.8X, code size: %X, data size: %X', [TextBase, CodeSize, FPESections[0].Misc.VirtualSize - CodeSize]));
+  DataSize := FPESections[DataSectionIndex].Misc.VirtualSize - (FBaseOfData - FPESections[DataSectionIndex].VirtualAddress);
+  Log(ltInfo, Format('Text base: %.8X, code size: %X, data size: %X', [TextBase, CodeSize, DataSize]));
   NumInstr := 0;
   IATRef := 0;
   GetMem(CodeDump, CodeSize);
