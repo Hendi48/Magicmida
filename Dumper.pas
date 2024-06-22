@@ -21,10 +21,11 @@ type
 
   TImportThunk = class
   public
+    Module: PRemoteModule;
     Name: string;
     Addresses: TList<PPointer>;
 
-    constructor Create(const AName: string);
+    constructor Create(RM: PRemoteModule);
     destructor Destroy; override;
   end;
 
@@ -39,7 +40,7 @@ type
     FForwardsCrypt32: TForwardDict; // Key: DPAPI, Value: crypt32
     FForwardsDbghelp: TForwardDict; // Key: dbgcore, Value: dbghelp
     FForwardsKernelbase: TForwardDict; // Key: NTDLL, Value: kernelbase (Win8 sync APIs like WakeByAddressAll)
-    FAllModules: TDictionary<string, PRemoteModule>;
+    FAllModules: TList<PRemoteModule>;
     FIATImage: PByte;
     FIATImageSize: Cardinal;
 
@@ -107,7 +108,7 @@ begin
 
   if FAllModules <> nil then
   begin
-    for RM in FAllModules.Values do
+    for RM in FAllModules do
     begin
       RM.ExportTbl.Free;
       Dispose(RM);
@@ -324,9 +325,10 @@ begin
         a^ := Fwd;
       RangeChecker := a^;
     end;
+    //Log(ltInfo, ' -> ' + IntToHex(UIntPtr(a^), 8));
 
     Found := False;
-    for RM in FAllModules.Values do
+    for RM in FAllModules do
       if (RangeChecker > RM.Base) and (RangeChecker < RM.EndOff) then
       begin
         if RM.ExportTbl = nil then
@@ -336,7 +338,7 @@ begin
         begin
           if (Thunks.Count = 0) or (Thunks.Last.Name <> RM.Name) or NeedNewThunk then
           begin
-            Thunks.Add(TImportThunk.Create(RM.Name));
+            Thunks.Add(TImportThunk.Create(RM));
             NeedNewThunk := False; // reset
           end;
 
@@ -371,7 +373,7 @@ begin
     s := AnsiString(Thunk.Name);
     Move(s[1], Strs^, Length(s));
     Inc(Strs, Length(s) + 1);
-    RM := FAllModules[Thunk.Name];
+    RM := Thunk.Module;
     Log(ltInfo, 'Thunk ' + Thunk.Name + ' - first import: ' + RM.ExportTbl[Thunk.Addresses.First^]);
     for j := 0 to Thunk.Addresses.Count - 1 do
     begin
@@ -474,7 +476,7 @@ begin
   if FAllModules = nil then
     TakeModuleSnapshot;
 
-  for RM in FAllModules.Values do
+  for RM in FAllModules do
     if (Address >= NativeUInt(RM.Base)) and (Address < NativeUInt(RM.EndOff)) then
     begin
       if RM.ExportTbl = nil then
@@ -492,7 +494,7 @@ var
   ME: TModuleEntry32;
   RM: PRemoteModule;
 begin
-  FAllModules := TDictionary<string, PRemoteModule>.Create;
+  FAllModules := TList<PRemoteModule>.Create;
   hSnap := CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, FProcess.dwProcessId);
   ME.dwSize := SizeOf(TModuleEntry32);
   if not Module32First(hSnap, ME) then
@@ -506,7 +508,7 @@ begin
       RM.EndOff := ME.modBaseAddr + ME.modBaseSize;
       RM.Name := LowerCase(ME.szModule);
       RM.ExportTbl := nil;
-      FAllModules.AddOrSetValue(RM.Name, RM);
+      FAllModules.Add(RM);
     end;
   until not Module32Next(hSnap, ME);
   CloseHandle(hSnap);
@@ -521,9 +523,10 @@ end;
 
 { TImportThunk }
 
-constructor TImportThunk.Create(const AName: string);
+constructor TImportThunk.Create(RM: PRemoteModule);
 begin
-  Name := AName;
+  Module := RM;
+  Name := RM.Name;
   Addresses := TList<PPointer>.Create;
 end;
 
