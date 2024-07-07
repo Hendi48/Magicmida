@@ -189,7 +189,8 @@ begin
       begin
         // Not using the normal GetProcAddress because it can return apphelp hooks (e.g., CoCreateInstance when running as admin)
         ProcAddr := GetLocalProcAddr(hMod, PAnsiChar(Copy(Fwd, DotPos + 1, 50)));
-        Fwds.AddOrSetValue(ProcAddr, PByte(hModReal) + a^);
+        if ProcAddr <> nil then
+          Fwds.AddOrSetValue(ProcAddr, PByte(hModReal) + a^);
         //Log(ltInfo, Format('%s @ %p', [PAnsiChar(Copy(Fwd, DotPos + 1, 50)), ProcAddr]));
       end
       //else

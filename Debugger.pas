@@ -340,6 +340,13 @@ begin
     Log(ltInfo, 'Process Image Base: ' + IntToHex(FImageBase, 8));
   end;
 
+  if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + $1E8, @Buf, 4, x) and (Buf <> 0) then
+  begin
+    Buf := 0;
+    if WriteProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + $1E8, @Buf, 4, x) then
+      Log(ltInfo, 'Cleared PEB.pShimData to prevent apphelp hooks');
+  end;
+
   FThreads.Add(DebugEv.dwThreadId, DebugEv.CreateProcessInfo.hThread);
 
   CloseHandleAPI := GetProcAddress(GetModuleHandle(kernel32), 'CloseHandle');
