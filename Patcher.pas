@@ -193,7 +193,7 @@ end;
 procedure TPatcher.MapleCreateDataSections;
 var
   Mem: PByte;
-  DataStart, DataSize, A, ZEnd, ZStart, GfidsSize: NativeUInt;
+  DataStart, DataStartTW, DataSize, A, ZEnd, ZStart, GfidsSize: NativeUInt;
   RDataStart, RDataSize: NativeUInt;
   i: Integer;
   Name: AnsiString;
@@ -213,6 +213,10 @@ begin
     else
     begin
       DataStart := FindStatic('2E3F41565F636F6D5F6572726F724040', Mem + ($B00000 - $400000), FStream.Size - ($B00000 - $400000));
+      DataStartTW := FindStatic('2E3F41563F245A4C69737440554D4150494E464F4043416374696F6E4672616D6540404040', Mem + ($B00000 - $400000), FStream.Size - ($B00000 - $400000)); // TW 122+
+      if (DataStartTW <> 0) and (DataStartTW < DataStart) then
+        DataStart := DataStartTW;
+
       if DataStart = 0 then
       begin
         raise Exception.Create('Data section not found');
