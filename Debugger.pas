@@ -1732,7 +1732,7 @@ var
     FillChar(Dis, SizeOf(Dis), 0);
     Dis.EIP := NativeUInt(CodeDump) + Address - TextBase;
     Dis.VirtualAddr := Address;
-    while NumInstr < 200 do
+    while (NumInstr < 200) or (IgnoreMethodBoundary and (Address < TextBase + CodeSize)) do
     begin
       Len := DisasmCheck(Dis);
       //Log(ltInfo, IntToHex(Dis.VirtualAddr) + ' : ' + string(AnsiString(Dis.CompleteInstr)));
