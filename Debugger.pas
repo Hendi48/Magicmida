@@ -1107,7 +1107,7 @@ begin
         begin
           FTLSTotal := TLSDist div 4;
           FTLSAddressesOfCallbacks := TLSDir.AddressOfCallBacks;
-          Log(ltInfo, Format('Expecting %d TLS entries', [FTLSTotal]));
+          Log(ltInfo, Format('Expecting up to %d TLS entries', [FTLSTotal]));
         end;
       end;
   end;
@@ -1566,6 +1566,7 @@ end;
 function TDebugger.ProcessGuardedAccess(hThread: THandle; var ExcRecord: TExceptionRecord): Cardinal;
 var
   OldProt, RetAddr: Cardinal;
+  Args: array[0..2] of Cardinal;
   C: TContext;
   OEP: NativeUInt;
 label
@@ -1592,13 +1593,11 @@ begin
     if GetThreadContext(hThread, C) then
     begin
       RPM(C.Esp, @RetAddr, 4);
-      // This might cause issues if there's no actual TLS and we have a stolen virtualized OEP.
-      // Some binaries have a sane-looking TLS directory but nothing is called.
-      // Perhaps check the 3 args passed to the callback for further assurance?
-      if TMSectR.Contains(RetAddr) and not IsTMExceptionHandler(RetAddr) then
+      RPM(C.Esp + 4, @Args, 12);
+      if TMSectR.Contains(RetAddr) and not IsTMExceptionHandler(RetAddr) and ((Args[0] and $FFF) = 0) and (Args[1] <= 3) then
       begin
         Inc(FTLSCounter);
-        Log(ltGood, Format('TLS %d: %.8X', [FTLSCounter, UIntPtr(ExcRecord.ExceptionAddress)]));
+        Log(ltGood, Format('TLS %d: %.8X (%X, %X, %X)', [FTLSCounter, UIntPtr(ExcRecord.ExceptionAddress), Args[0], Args[1], Args[2]]));
         // Skip execution, we want nothing initialized in the unpacked binary.
         C.Eip := RetAddr;
         Inc(C.Esp, 4 + 3*4);
@@ -1607,7 +1606,7 @@ begin
       end
       else
       begin
-        Log(ltInfo, 'This doesn''t look like TLS, assuming OEP.');
+        Log(ltInfo, Format('This doesn''t look like TLS (ret %X; args %X, %X, %X), assuming OEP.', [RetAddr, Args[0], Args[1], Args[2]]));
         goto OEPReached;
       end;
     end
