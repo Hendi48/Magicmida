@@ -1587,7 +1587,7 @@ begin
     C.EFlags := C.EFlags or $100;
     SetThreadContext(hThread, C);
   end
-  else if (ExcRecord.ExceptionInformation[0] = 8) and (FTLSTotal > 0) and (FTLSCounter < FTLSTotal) then
+  else if {(ExcRecord.ExceptionInformation[0] = 8) and} (FTLSTotal > 0) and (FTLSCounter < FTLSTotal) then
   begin
     C.ContextFlags := CONTEXT_CONTROL;
     if GetThreadContext(hThread, C) then
