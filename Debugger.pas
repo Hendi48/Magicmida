@@ -768,8 +768,9 @@ begin
   Log(ltInfo, 'Please wait, call site tracing might take a while...');
 end;
 
-function DisasmCheck(var Dis: _Disasm): Integer;
+function DisasmCheck(var Dis: TDisasm): Integer;
 begin
+  Dis.Archi := 32;
   Result := Disasm(Dis);
   if (Result = BeaEngineDelphi32.UNKNOWN_OPCODE) or (Result = BeaEngineDelphi32.OUT_OF_BLOCK) then
     raise Exception.CreateFmt('Disasm result: %d (EIP = %X)', [Result, Dis.EIP]);
@@ -781,7 +782,7 @@ var
   HookDest: Pointer;
   bs: array[0..127] of Byte;
   Buf, OrigOps: PByte;
-  Dis: _Disasm;
+  Dis: TDisasm;
   M, FoundBase: HMODULE;
   RegComp: Word;
   TotalSize, x: NativeUInt;
@@ -1213,7 +1214,7 @@ end;
 function TDebugger.GetIATBPAddressNew(var Res: NativeUInt): Boolean;
 var
   B: Byte;
-  Dis: _Disasm;
+  Dis: TDisasm;
 begin
   repeat
     Res := FindDynamicTM('39??9C', Res);
@@ -1740,8 +1741,8 @@ var
       if (PWord(Dis.EIP)^ = $15FF) or (PWord(Dis.EIP)^ = $25FF) then // call dword ptr/jmp dword ptr
       begin
         // Ensure we didn't stumble upon a pointer into .text.
-        if not RPM(Dis.Argument1.Memory.Displacement, @ThePointer, SizeOf(ThePointer)) or (ThePointer > TextBase + CodeSize) then
-          Exit(Dis.Argument1.Memory.Displacement);
+        if not RPM(Dis.Operand1.Memory.Displacement, @ThePointer, SizeOf(ThePointer)) or (ThePointer > TextBase + CodeSize) then
+          Exit(Dis.Operand1.Memory.Displacement);
       end;
 
       if (PByte(Dis.EIP)^ = $E8) and not IgnoreMethodBoundary then // call
