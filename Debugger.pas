@@ -2,48 +2,21 @@ unit Debugger;
 
 interface
 
-uses Windows, SysUtils, Classes, Utils, TlHelp32, Generics.Collections, Dumper, Patcher, Tracer;
+uses Windows, SysUtils, Classes, Utils, TlHelp32, Generics.Collections, DebuggerCore, Dumper, Patcher, Tracer;
 
 type
-  THWBPType = (hwExecute, hwWrite, hwReserved, hwAccess);
-
-  TBreakpoint = record
-    Address: NativeUInt;
-    BType: THWBPType;
-    Disabled: Boolean;
-
-    procedure Change(AAddress: NativeUInt; AType: THWBPType);
-    function IsSet: Boolean;
-  end;
-
-  TMemoryRegion = record
-    Address: NativeUInt;
-    Size: Cardinal;
-
-    function Contains(Addr: NativeUInt): Boolean;
-  end;
-
   TEFLRecord = record
     Address: NativeUInt;
     Original: TBytes;
   end;
 
-  TDebugger = class(TThread)
+  TDebugger = class(TDebuggerCore)
   private
-    FExecutable, FParameters: string;
     FCreateDataSections: Boolean;
-    FProcess: TProcessInformation;
-    FImageBase, FBaseOfData: NativeUInt;
+    FBaseOfData: NativeUInt;
     FPESections: array of TImageSectionHeader;
     FMajorLinkerVersion: Byte;
-    FHideThreadEnd: Boolean;
     FWow64: LongBool;
-    FHW1, FHW2, FHW3, FHW4: TBreakpoint;
-    FThreads: TDictionary<Cardinal, THandle>;
-    FCurrentThreadID: Cardinal;
-    FMemRegions: array of TMemoryRegion;
-    FSoftBPs: TDictionary<Pointer, Byte>;
-    FSoftBPReenable: Cardinal;
 
     // Themida
     FImageBoundary: NativeUInt;
@@ -72,23 +45,6 @@ type
     FTLSAddressesOfCallbacks: Cardinal;
     FTLSCounter, FTLSTotal: Cardinal;
 
-    function PEExecute: Boolean;
-
-    procedure FetchMemoryRegions;
-
-    function OnCreateThreadDebugEvent(var DebugEv: TDebugEvent): DWORD;
-    function OnCreateProcessDebugEvent(var DebugEv: TDebugEvent): DWORD;
-    function OnExitThreadDebugEvent(var DebugEv: TDebugEvent): DWORD;
-    function OnLoadDllDebugEvent(var DebugEv: TDebugEvent): DWORD;
-    function OnExitProcessDebugEvent(var DebugEv: TDebugEvent): DWORD;
-    function OnUnloadDllDebugEvent(var DebugEv: TDebugEvent): DWORD;
-    function OnOutputDebugStringEvent(var DebugEv: TDebugEvent): DWORD;
-    function OnRipEvent(var DebugEv: TDebugEvent): DWORD;
-    function OnHardwareBreakpoint(var DebugEv: TDebugEvent): DWORD;
-    function OnSoftwareBreakpoint(var DebugEv: TDebugEvent): DWORD;
-
-    function RPM(Address: NativeUInt; Buf: Pointer; BufSize: NativeUInt): Boolean;
-
     function FindDynamicTM(const APattern: AnsiString; AOff: Cardinal = 0): Cardinal;
     function FindStaticTM(const APattern: AnsiString; AOff: Cardinal = 0): Cardinal;
     procedure SelectThemidaSection(EIP: NativeUInt);
@@ -105,7 +61,7 @@ type
 
     procedure InstallCodeSectionGuard(Protection: Cardinal);
     function IsGuardedAddress(Address: NativeUInt): Boolean;
-    function ProcessGuardedAccess(hThread: THandle; var ExcRecord: TExceptionRecord): Cardinal;
+    function ProcessGuardedAccess(hThread: THandle; const ExcRecord: TExceptionRecord): Cardinal;
 
     procedure RestoreStolenOEPForMSVC6(hThread: THandle; var OEP: NativeUInt);
     procedure CheckVirtualizedOEP(OEP: NativeUInt);
@@ -116,17 +72,12 @@ type
     procedure TraceImports(IAT: NativeUInt);
     function TraceIsAtAPI(Tracer: TTracer; var C: TContext): Boolean;
     procedure FinishUnpacking(OEP: NativeUInt);
-
-    procedure SetBreakpoint(Address: NativeUInt; BType: THWBPType = hwExecute);
-    function DisableBreakpoint(Address: Pointer): Boolean;
-    procedure EnableBreakpoints;
-    function IsHWBreakpoint(Address: Pointer): Boolean;
-    procedure ResetBreakpoint(Address: Pointer);
-    procedure UpdateDR(hThread: THandle);
-
-    procedure SoftBPClear;
   protected
-    procedure Execute; override;
+    procedure OnDebugStart(var hPE: THandle; hThread: THandle); override;
+    function OnAccessViolation(hThread: THandle; const ExcRec: TExceptionRecord): Cardinal; override;
+    function OnSinglestep(BPA: NativeUInt): Cardinal; override;
+    procedure OnHardwareBreakpoint(hThread: THandle; BPA: NativeUInt; var C: TContext); override;
+    function OnSoftwareBreakpoint(hThread: THandle; BPA: Pointer): TSoftBPAction; override;
   public
     constructor Create(const AExecutable, AParameters: string; ACreateData: Boolean);
     destructor Destroy; override;
@@ -140,217 +91,32 @@ uses BeaEngineDelphi32, ShellAPI, AntiDumpFix, Math;
 
 constructor TDebugger.Create(const AExecutable, AParameters: string; ACreateData: Boolean);
 begin
-  FExecutable := AExecutable;
-  FParameters := AParameters;
   FCreateDataSections := ACreateData;
-
-  FThreads := TDictionary<Cardinal, THandle>.Create(32);
-  FSoftBPs := TDictionary<Pointer, Byte>.Create;
 
   FGuardAddrs := TList<NativeUInt>.Create;
 
-  inherited Create(False);
+  inherited Create(AExecutable, AParameters, Utils.Log);
 end;
 
 destructor TDebugger.Destroy;
 begin
-  FThreads.Free;
-  FSoftBPs.Free;
-
   FGuardAddrs.Free;
 
   inherited;
 end;
 
-procedure TDebugger.Execute;
-var
-  Ev: TDebugEvent;
-  Status: Cardinal;
+function TDebugger.OnAccessViolation(hThread: THandle; const ExcRec: TExceptionRecord): Cardinal;
 begin
-  if not PEExecute then
-  begin
-    try
-      RaiseLastOSError;
-    except
-      Log(ltFatal, 'Creating the process failed: ' + ExceptObject.ToString);
-    end;
-    Exit;
-  end;
-
-  //KM.SetPID(FProcess.dwProcessId);
-  try
-    Status := DBG_CONTINUE;
-    while True do
-    begin
-      if not WaitForDebugEvent(Ev, INFINITE) then
-      begin
-        try
-          RaiseLastOSError;
-        except
-          Log(ltFatal, 'OS Error: ' + ExceptObject.ToString);
-        end;
-        Exit;
-      end;
-      //Writeln(Ev.dwDebugEventCode);
-
-      FCurrentThreadID := Ev.dwThreadId;
-
-      case Ev.dwDebugEventCode of
-        EXCEPTION_DEBUG_EVENT:
-        begin
-          Status := DBG_EXCEPTION_NOT_HANDLED;
-          case Ev.Exception.ExceptionRecord.ExceptionCode of
-             EXCEPTION_ACCESS_VIOLATION:
-               if IsGuardedAddress(Ev.Exception.ExceptionRecord.ExceptionInformation[1]) then
-                 Status := ProcessGuardedAccess(FThreads[Ev.dwThreadId], Ev.Exception.ExceptionRecord)
-               else
-                 Log(ltInfo, Format('Access violation at 0x%p [0x%X]', [Ev.Exception.ExceptionRecord.ExceptionAddress, Ev.Exception.ExceptionRecord.ExceptionInformation[1]]));
-
-             EXCEPTION_BREAKPOINT: // First chance: Display the current instruction and register values.
-             begin
-               if FSoftBPs.ContainsKey(Ev.Exception.ExceptionRecord.ExceptionAddress) then
-               begin
-                 Status := OnSoftwareBreakpoint(Ev);
-               end
-               else
-                 Log(ltInfo, 'Random int3');
-             end;
-
-             EXCEPTION_DATATYPE_MISALIGNMENT: ;
-               // First chance: Pass this on to the system.
-               // Last chance: Display an appropriate error.
-
-             EXCEPTION_SINGLE_STEP:
-               Status := OnHardwareBreakpoint(Ev);
-
-             DBG_CONTROL_C: ;
-               // First chance: Pass this on to the system.
-               // Last chance: Display an appropriate error.
-
-             else // Handle other exceptions.
-             begin
-               if Ev.Exception.dwFirstChance = 0 then
-               begin
-                 Log(ltFatal, 'dwFirstChance = 0');
-                 Exit;
-               end;
-               Log(ltInfo, Format('Code 0x%.8X at 0x%p', [Ev.Exception.ExceptionRecord.ExceptionCode, Ev.Exception.ExceptionRecord.ExceptionAddress]));
-               Status := DBG_EXCEPTION_NOT_HANDLED;
-             end;
-          end;
-        end;
-
-        CREATE_THREAD_DEBUG_EVENT:
-         // As needed, examine or change the thread's registers
-         // with the GetThreadContext and SetThreadContext functions;
-         // and suspend and resume thread execution with the
-         // SuspendThread and ResumeThread functions.
-          Status := OnCreateThreadDebugEvent(Ev);
-
-        CREATE_PROCESS_DEBUG_EVENT:
-         // As needed, examine or change the registers of the
-         // process's initial thread with the GetThreadContext and
-         // SetThreadContext functions; read from and write to the
-         // process's virtual memory with the ReadProcessMemory and
-         // WriteProcessMemory functions; and suspend and resume
-         // thread execution with the SuspendThread and ResumeThread
-         // functions. Be sure to close the handle to the process image
-         // file with CloseHandle.
-          Status := OnCreateProcessDebugEvent(Ev);
-
-        EXIT_THREAD_DEBUG_EVENT:
-         // Display the thread's exit code.
-          Status := OnExitThreadDebugEvent(Ev);
-
-        EXIT_PROCESS_DEBUG_EVENT:
-        begin
-          Status := OnExitProcessDebugEvent(Ev);
-          ContinueDebugEvent(Ev.dwProcessId, Ev.dwThreadId, Status);
-          Break;
-        end;
-
-        LOAD_DLL_DEBUG_EVENT:
-         // Read the debugging information included in the newly
-         // loaded DLL. Be sure to close the handle to the loaded DLL
-         // with CloseHandle.
-          Status := OnLoadDllDebugEvent(Ev);
-
-        UNLOAD_DLL_DEBUG_EVENT:
-         // Display a message that the DLL has been unloaded.
-          Status := OnUnloadDllDebugEvent(Ev);
-
-        OUTPUT_DEBUG_STRING_EVENT:
-         // Display the output debugging string.
-          Status := OnOutputDebugStringEvent(Ev);
-
-        RIP_EVENT:
-          Status := OnRipEvent(Ev);
-      end;
-
-      // Resume executing the thread that reported the debugging event.
-      ContinueDebugEvent(Ev.dwProcessId, Ev.dwThreadId, Status);
-    end;
-  except
-    Log(ltFatal, ExceptObject.ToString);
-  end;
-end;
-
-function TDebugger.OnCreateThreadDebugEvent(var DebugEv: TDebugEvent): DWORD;
-begin
-  Log(ltInfo, Format('[%.4d] Thread started (%p).', [DebugEv.dwThreadId, DebugEv.CreateThread.lpStartAddress]));
-
-  FThreads.Add(DebugEv.dwThreadId, DebugEv.CreateThread.hThread);
-  UpdateDR(DebugEv.CreateThread.hThread);
-
-  Result := DBG_CONTINUE;
-end;
-
-function TDebugger.OnCreateProcessDebugEvent(var DebugEv: TDebugEvent): DWORD;
-var
-  pbi: TProcessBasicInformation;
-  Buf: Cardinal;
-  x: NativeUInt;
-begin
-  Log(ltInfo, Format('CreateProcess (%.4d, %.4d)', [DebugEv.dwProcessId, DebugEv.dwThreadId]));
-
-  NtQueryInformationProcess(FProcess.hProcess, 0, @pbi, SizeOf(pbi), nil);
-  Log(ltInfo, Format('PEB: %.8X', [Cardinal(pbi.PebBaseAddress)]));
-
-  Buf := 0;
-  if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + 2, @Buf, 1, x) then
-  begin
-    if Buf = 1 then
-    begin
-      Log(ltGood, 'Patching PEB.BeingDebugged');
-      Buf := 0;
-      WriteProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + 2, @Buf, 1, x);
-      if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + $68, @Buf, 4, x) then
-      begin
-        Log(ltInfo, 'NtGlobalFlags: ' + IntToStr(Buf));
-        Buf := 0;
-        WriteProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + $68, @Buf, 4, x);
-      end;
-    end;
-  end
+  if IsGuardedAddress(ExcRec.ExceptionInformation[1]) then
+    Result := ProcessGuardedAccess(hThread, ExcRec)
   else
-    Log(ltFatal, 'Reading PEB failed');
+    Result := inherited;
+end;
 
-  if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + 8, @FImageBase, 4, x) then
-  begin
-    Log(ltInfo, 'Process Image Base: ' + IntToHex(FImageBase, 8));
-  end;
-
-  if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + $1E8, @Buf, 4, x) and (Buf <> 0) then
-  begin
-    Buf := 0;
-    if WriteProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + $1E8, @Buf, 4, x) then
-      Log(ltInfo, 'Cleared PEB.pShimData to prevent apphelp hooks');
-  end;
-
-  FThreads.Add(DebugEv.dwThreadId, DebugEv.CreateProcessInfo.hThread);
-
+procedure TDebugger.OnDebugStart(var hPE: THandle; hThread: THandle);
+begin
   CloseHandleAPI := GetProcAddress(GetModuleHandle(kernel32), 'CloseHandle');
-  FHW1.Address := Cardinal(CloseHandleAPI);
+  SetBreakpoint(Cardinal(CloseHandleAPI), hwExecute, False);
 
   if FileExists('InjectorCLIx86.exe') then
   begin
@@ -360,21 +126,18 @@ begin
   else
   begin
     NtSIT := GetProcAddress(GetModuleHandle('ntdll.dll'), 'ZwSetInformationThread');
-    FHW3.Address := Cardinal(NtSIT);
+    SetBreakpoint(Cardinal(NtSIT), hwExecute, False);
     KiFastSystemCall := GetProcAddress(GetModuleHandle('ntdll.dll'), 'KiFastSystemCall');
 
     if not (IsWow64Process(FProcess.hProcess, FWow64) and FWow64) then
     begin
-      VirtualProtectEx(FProcess.hProcess, KiFastSystemCall, 1, PAGE_EXECUTE_READWRITE, @x);
-      Buf := $CC;
-      WriteProcessMemory(FProcess.hProcess, KiFastSystemCall, @Buf, 1, x);
-      FSoftBPs.Add(KiFastSystemCall, $8B);
+      SetSoftBP(KiFastSystemCall);
       NtQIP := PCardinal(Cardinal(GetProcAddress(GetModuleHandle('ntdll.dll'), 'ZwQueryInformationProcess')) + 1)^;
     end
     else
     begin
       NtQIP64 := GetProcAddress(GetModuleHandle('ntdll.dll'), 'ZwQueryInformationProcess');
-      FHW4.Address := Cardinal(NtQIP64);
+      SetBreakpoint(Cardinal(NtQIP64), hwExecute, False);
     end;
   end;
 
@@ -383,46 +146,22 @@ begin
   FSleepAPI := NativeUInt(GetProcAddress(GetModuleHandle(kernel32), 'Sleep'));
   FlstrlenAPI := NativeUInt(GetProcAddress(GetModuleHandle(kernel32), 'lstrlen'));
 
-  UpdateDR(DebugEv.CreateProcessInfo.hThread);
+  UpdateDR(hThread);
 
   //FetchMemoryRegions;
-  TMInit(DebugEv.CreateProcessInfo.hFile);
-
-  Result := DBG_CONTINUE;
-
-  CloseHandle(DebugEv.CreateProcessInfo.hFile);
-  //CloseHandle(DebugEv.CreateProcessInfo.hProcess);
-  //CloseHandle(DebugEv.CreateProcessInfo.hThread);
-end;
-
-function TDebugger.OnExitThreadDebugEvent(var DebugEv: TDebugEvent): DWORD;
-begin
-  if not FHideThreadEnd then
-    Log(ltInfo, Format('[%.4d] Thread ended (code %d).', [DebugEv.dwThreadId, DebugEv.ExitThread.dwExitCode]));
-  FThreads.Remove(DebugEv.dwThreadId);
-  Result := DBG_CONTINUE;
+  TMInit(hPE);
 end;
 
 const
   STATUS_PORT_NOT_SET = $C0000353;
 
-function TDebugger.OnHardwareBreakpoint(var DebugEv: TDebugEvent): DWORD;
+procedure TDebugger.OnHardwareBreakpoint(hThread: THandle; BPA: NativeUInt; var C: TContext);
 var
   EIP: Pointer;
-  hThread: THandle;
-  C: TContext;
-  Buf, Buf2, BPA, OldProt, WriteBuf, InfoClass: Cardinal;
-  Resume: Boolean;
+  Buf, Buf2, WriteBuf, InfoClass: Cardinal;
   x: NativeUInt;
-  CC: Byte;
 begin
-  Resume := False;
-  Result := DBG_EXCEPTION_NOT_HANDLED;
-  EIP := DebugEv.Exception.ExceptionRecord.ExceptionAddress;
-
-  hThread := FThreads[DebugEv.dwThreadId];
-  C.ContextFlags := CONTEXT_FULL or CONTEXT_DEBUG_REGISTERS;
-  GetThreadContext(hThread, C);
+  EIP := Pointer(C.Eip);
 
   if EIP = CloseHandleAPI then
   begin
@@ -436,7 +175,6 @@ begin
       else
         SetBreakpoint(Cardinal(AllocMemAPI));
     end;
-    Resume := True;
   end
   else if EIP = AllocMemAPI then
   begin
@@ -467,31 +205,26 @@ begin
           InstallCodeSectionGuard(PAGE_NOACCESS);
       end;
     end;
-    Resume := True;
   end
   else if EIP = CmpImgBase then
   begin
     ResetBreakpoint(CmpImgBase);
     TMIATFix3(NativeUInt(EIP));
-    Resume := True;
   end
   else if EIP = MagicJump then
   begin
     ResetBreakpoint(MagicJump);
     TMIATFix4;
-    Resume := True;
   end
   else if EIP = Pointer(MJ_1) then
   begin
     ResetBreakpoint(Pointer(MJ_1));
     TMIATFix5(C.Eax);
-    Resume := True;
   end
   else if EIP = MagicJumpV1 then
   begin
     ResetBreakpoint(MagicJumpV1);
     TMIATFixThemidaV1(UIntPtr(MagicJumpV1));
-    Resume := True;
   end
   else if EIP = AllocHeapAPI then
   begin
@@ -499,7 +232,6 @@ begin
     ResetBreakpoint(AllocHeapAPI);
     SoftBPClear;
     InstallCodeSectionGuard(PAGE_NOACCESS);
-    Resume := True;
   end
   else if EIP = VirtualProtectAPI then
   begin
@@ -508,11 +240,9 @@ begin
     Log(ltInfo, Format('[%d] Protect: %X %X', [FCurrentThreadId, Buf, Buf2]));}
     // Ensure we break on execution in case it's still on PAGE_READONLY.
     InstallCodeSectionGuard(PAGE_NOACCESS);
-    Resume := True;
   end
   else if EIP = NtSIT then
   begin
-    Resume := True;
     if RPM(C.Esp, @Buf, 4) and (Buf < FImageBoundary) and RPM(C.Esp + 8, @InfoClass, 4) and (InfoClass = 17) then
     begin
       Log(ltGood, 'Ignoring NtSetInformationThread(ThreadHideFromDebugger)');
@@ -526,7 +256,6 @@ begin
   end
   else if FWow64 and (EIP = NtQIP64) then
   begin
-    Resume := True;
     if RPM(C.Esp, @Buf, 4) and RPM(C.Esp + 8, @InfoClass, 4) and ((InfoClass = 7) or (InfoClass = 30)) then
     begin
       if InfoClass = 7 then
@@ -547,109 +276,69 @@ begin
         Log(ltFatal, '[KiFastSystemCall] SetContextThread');
     end;
   end
-  else
+  else if BPA = FImageBase + $1000 then
   begin
-    // Check if Single-step execution mode (bit 14)
-    if (((C.Dr6 shr 14) and 1) = 0) and (FHW1.IsSet or FHW2.IsSet or FHW3.IsSet or FHW4.IsSet) then
+    Inc(FBaseAccessCount);
+    Log(ltGood, Format('Accessed text base from %p', [EIP]));
+    if not BaseAccessed then
     begin
-      BPA := 0;
-      case C.Dr6 and $F of
-        1: BPA := FHW1.Address;
-        2: BPA := FHW2.Address;
-        4: BPA := FHW3.Address;
-        8: BPA := FHW4.Address;
-        else Log(ltFatal, 'Multisignal : ' + IntToStr(C.Dr6 and $F));
-      end;
-
-      if BPA = FImageBase + $1000 then
-      begin
-        Inc(FBaseAccessCount);
-        Log(ltGood, Format('Accessed text base from %p', [EIP]));
-        if not BaseAccessed then
-        begin
-          ResetBreakpoint(Pointer(FImageBase + $1000));
-          SetBreakpoint(FImageBase + $1000, hwWrite);
-          BaseAccessed := True;
-        end
-        else
-        begin
-          if TMFinderCheck(@C) then
-          begin
-            ResetBreakpoint(Pointer(FImageBase + $1000));
-            SetBreakpoint(Cardinal(AllocMemAPI), hwExecute);
-            RepEIP := C.Eip;
-          end
-          else if (FBaseAccessCount = 3) and not FThemidaV2BySections then // hackish, but seems ok so far
-          begin
-            FThemidaV3 := True;
-            Log(ltInfo, 'Assuming Themida v3');
-            SelectThemidaSection(C.Eip);
-            ResetBreakpoint(Pointer(FImageBase + $1000));
-            SetBreakpoint(Cardinal(AllocMemAPI), hwExecute);
-          end;
-        end;
-      end
-      else
-      begin
-        Log(ltInfo, Format('Accessed %x from %p', [BPA, EIP]));
-      end;
-
-      Exit(DBG_CONTINUE);
-    end
-    else if FSoftBPReenable <> 0 then
-    begin
-      CC := $CC;
-      WriteProcessMemory(FProcess.hProcess, PByte(FSoftBPReenable), @CC, 1, x);
-      FSoftBPReenable := 0;
-      Exit(DBG_CONTINUE);
-    end
-    else if FGuardStepping then
-    begin
-      VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, FGuardProtection, OldProt);
-      FGuardStepping := False;
-      Exit(DBG_CONTINUE);
+      ResetBreakpoint(Pointer(FImageBase + $1000));
+      SetBreakpoint(FImageBase + $1000, hwWrite);
+      BaseAccessed := True;
     end
     else
     begin
-      EnableBreakpoints;
-      Result := DBG_CONTINUE;
+      if TMFinderCheck(@C) then
+      begin
+        ResetBreakpoint(Pointer(FImageBase + $1000));
+        SetBreakpoint(Cardinal(AllocMemAPI), hwExecute);
+        RepEIP := C.Eip;
+      end
+      else if (FBaseAccessCount = 3) and not FThemidaV2BySections then // hackish, but seems ok so far
+      begin
+        FThemidaV3 := True;
+        Log(ltInfo, 'Assuming Themida v3');
+        SelectThemidaSection(C.Eip);
+        ResetBreakpoint(Pointer(FImageBase + $1000));
+        SetBreakpoint(Cardinal(AllocMemAPI), hwExecute);
+      end;
     end;
-  end;
-
-  if Resume then
+  end
+  else
   begin
-    if DisableBreakpoint(EIP) then
-    begin
-      UpdateDR(hThread);
-      C.ContextFlags := CONTEXT_CONTROL;
-      C.EFlags := C.EFlags or $100;
-      SetThreadContext(hThread, C);
-    end;
-    Result := DBG_CONTINUE;
+    Log(ltInfo, Format('Accessed %x from %p', [BPA, EIP]));
   end;
 end;
 
-function TDebugger.OnSoftwareBreakpoint(var DebugEv: TDebugEvent): DWORD;
+function TDebugger.OnSinglestep(BPA: NativeUInt): Cardinal;
 var
-  B: Byte;
+  OldProt: NativeUInt;
+begin
+  if FGuardStepping then
+  begin
+    VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, FGuardProtection, OldProt);
+    FGuardStepping := False;
+    Exit(DBG_CONTINUE);
+  end;
+
+  Result := inherited;
+end;
+
+function TDebugger.OnSoftwareBreakpoint(hThread: THandle; BPA: Pointer): TSoftBPAction;
+var
   x, Jumper, Res: NativeUInt;
-  hThread: THandle;
   C: TContext;
-  EIP: Pointer;
   mK32, mU32, mA32: HMODULE;
   bs: array[0..40] of Byte;
   Buf: PByte;
   i: Integer;
   WriteBuf, InfoClass: Cardinal;
 begin
-  Result := DBG_CONTINUE;
-  EIP := DebugEv.Exception.ExceptionRecord.ExceptionAddress;
-  if not FWow64 and (EIP = KiFastSystemCall) then
-  begin
-    hThread := FThreads[DebugEv.dwThreadId];
-    C.ContextFlags := CONTEXT_FULL;
-    GetThreadContext(hThread, C);
+  C.ContextFlags := CONTEXT_FULL;
+  GetThreadContext(hThread, C);
 
+  if not FWow64 and (BPA = KiFastSystemCall) then
+  begin
     if (C.Eax = NtQIP) and RPM(C.Esp, @Res, 4) and RPM(C.Esp + 12, @InfoClass, 4) and ((InfoClass = 7) or (InfoClass = 30)) then
     begin
       if InfoClass = 7 then
@@ -674,25 +363,17 @@ begin
 
     if not SetThreadContext(hThread, C) then
       Log(ltFatal, '[KiFastSystemCall] SetContextThread');
-    Exit;
+    Exit(sbpKeepContinueNoStep);
   end;
 
-  Log(ltInfo, Format('Software breakpoint at %p', [EIP]));
+  Log(ltInfo, Format('Software breakpoint at %p', [BPA]));
 
   // Should only be called during IAT patching
   // eax should hold a module base now
 
-  hThread := FThreads[DebugEv.dwThreadId];
-  C.ContextFlags := CONTEXT_FULL;
-  GetThreadContext(hThread, C);
-  Dec(C.Eip);
-  C.ContextFlags := CONTEXT_CONTROL;
-  SetThreadContext(hThread, C);
-
-  mK32 := GetModuleHandle(kernel32);
-
   if not NewVer then
   begin
+    mK32 := GetModuleHandle(kernel32);
     mU32 := GetModuleHandle(user32);
     mA32 := GetModuleHandle(advapi32);
     if (C.Eax <> mK32) and (C.Eax <> mU32) and (C.Eax <> mA32) then
@@ -702,15 +383,10 @@ begin
       if not IsHWBreakpoint(AllocHeapAPI) then
         SetBreakpoint(Cardinal(AllocHeapAPI), hwExecute);
       // Restore original byte and single step.
-      FSoftBPReenable := C.Eip;
-      B := FSoftBPs[EIP];
-      WriteProcessMemory(FProcess.hProcess, EIP, @B, 1, x);
-      FlushInstructionCache(FProcess.hProcess, EIP, 1);
-      C.EFlags := C.EFlags or $100;
-      SetThreadContext(hThread, C);
-      Exit; // DBG_CONTINUE
+      Exit(sbpKeepContinue);
     end;
 
+    Result := sbpClearContinue;
     SoftBPClear;
 
     Jumper := 5 + C.Eip + PCardinal(TMSect + C.Eip + 1 - TMSectR.Address)^;
@@ -742,17 +418,14 @@ begin
   end
   else // Teflon time!
   begin
-    B := FSoftBPs[EIP];
-    WriteProcessMemory(FProcess.hProcess, EIP, @B, 1, x);
-    FlushInstructionCache(FProcess.hProcess, EIP, 1);
-    FSoftBPs.Remove(EIP);
+    Result := sbpClearContinue;
 
     for i := 0 to High(EFLs) do
     begin
       if EFLs[i].Address = 0 then
       begin
-        EFLs[i].Address := Cardinal(EIP);
-        if InstallEFLPatch(EIP, C, EFLs[i]) then
+        EFLs[i].Address := Cardinal(BPA);
+        if InstallEFLPatch(BPA, C, EFLs[i]) then
           Exit
         else
           Break;
@@ -881,153 +554,6 @@ begin
   Log(ltGood, 'EFL Patch at ' + IntToHex(Cardinal(EIP), 8));
 
   Result := True;
-end;
-
-function TDebugger.OnLoadDllDebugEvent(var DebugEv: TDebugEvent): DWORD;
-var
-  lpImageName: Pointer;
-  szBuffer: array[0..MAX_PATH] of Char;
-  x: NativeUInt;
-  DLL: string;
-begin
-  if (not ReadProcessMemory(FProcess.hProcess, DebugEv.LoadDll.lpImageName, @lpImageName, Sizeof(Pointer), x) or
-      not ReadProcessMemory(FProcess.hProcess, lpImageName, @szBuffer, sizeof(szBuffer), x)) then
-    szBuffer := '?';
-  DLL := string(szBuffer);
-  Log(ltInfo, Format('[%.8X] Loaded %s', [Cardinal(DebugEv.LoadDll.lpBaseOfDll), DLL]));
-  if Pos('aclayers.dll', LowerCase(DLL)) > 0 then
-    raise Exception.Create('[FATAL] Compatibility mode screws up the unpacking process.');
-  Result := DBG_CONTINUE;
-  CloseHandle(DebugEv.LoadDll.hFile);
-end;
-
-function TDebugger.OnExitProcessDebugEvent(var DebugEv: TDebugEvent): DWORD;
-begin
-  Log(ltInfo, Format('Process ended (code %d).', [DebugEv.ExitProcess.dwExitCode]));
-  Result := DBG_CONTINUE;
-end;
-
-function TDebugger.OnUnloadDllDebugEvent(var DebugEv: TDebugEvent): DWORD;
-begin
-  Result := DBG_CONTINUE;
-end;
-
-function TDebugger.OnOutputDebugStringEvent(var DebugEv: TDebugEvent): DWORD;
-begin
-  Result := DBG_CONTINUE;
-end;
-
-function TDebugger.OnRipEvent(var DebugEv: TDebugEvent): DWORD;
-begin
-  Log(ltFatal, 'SYSTEM ERROR');
-  Result := DBG_CONTINUE;
-end;
-
-function TDebugger.PEExecute: Boolean;
-var
-  SI: TStartupInfo;
-  PI: TProcessInformation;
-  Flags: DWORD;
-  CmdLine, CurrentDir: string;
-begin
-  CurrentDir := ExtractFilePath(FExecutable);
-  if AnsiLastChar(CurrentDir) = '\' then
-    Delete(CurrentDir, Length(CurrentDir), 1);
-
-  FillChar(SI, SizeOf(SI), 0);
-  with SI do
-  begin
-    cb := SizeOf(SI);
-    dwFlags := STARTF_USESHOWWINDOW;
-    wShowWindow := SW_SHOW;
-  end;
-
-  FillChar(PI, SizeOf(PI), 0);
-  CmdLine := Format('"%s" %s', [FExecutable, TrimRight(FParameters)]);
-
-  Flags := CREATE_DEFAULT_ERROR_MODE or CREATE_NEW_CONSOLE or NORMAL_PRIORITY_CLASS or DEBUG_PROCESS or DEBUG_ONLY_THIS_PROCESS;
-
-  Result := CreateProcess(nil, PChar(CmdLine), nil, nil, False, Flags, nil, PChar(CurrentDir), SI, PI);
-  FProcess := PI;
-end;
-
-procedure TDebugger.SetBreakpoint(Address: NativeUInt; BType: THWBPType);
-var
-  T: THandle;
-begin
-  if FHW1.Address = 0 then
-    FHW1.Change(Address, BType)
-  else if FHW2.Address = 0 then
-    FHW2.Change(Address, BType)
-  else if FHW3.Address = 0 then
-    FHW3.Change(Address, BType)
-  else if FHW4.Address = 0 then
-    FHW4.Change(Address, BType)
-  else
-    raise Exception.Create('All breakpoints in use');
-
-  for T in FThreads.Values do
-    UpdateDR(T);
-end;
-
-function TDebugger.DisableBreakpoint(Address: Pointer): Boolean;
-begin
-  Result := True;
-
-  if Pointer(FHW1.Address) = Address then
-    FHW1.Disabled := True
-  else if Pointer(FHW2.Address) = Address then
-    FHW2.Disabled := True
-  else if Pointer(FHW3.Address) = Address then
-    FHW3.Disabled := True
-  else if Pointer(FHW4.Address) = Address then
-    FHW4.Disabled := True
-  else
-    Result := False;
-end;
-
-procedure TDebugger.EnableBreakpoints;
-var
-  T: THandle;
-begin
-  if FHW1.Disabled or FHW2.Disabled or FHW3.Disabled or FHW4.Disabled then
-  begin
-    FHW1.Disabled := False;
-    FHW2.Disabled := False;
-    FHW3.Disabled := False;
-    FHW4.Disabled := False;
-
-    for T in FThreads.Values do
-      UpdateDR(T);
-  end;
-end;
-
-procedure TDebugger.ResetBreakpoint(Address: Pointer);
-var
-  T: THandle;
-begin
-  if Pointer(FHW1.Address) = Address then
-    FHW1.Address := 0
-  else if Pointer(FHW2.Address) = Address then
-    FHW2.Address := 0
-  else if Pointer(FHW3.Address) = Address then
-    FHW3.Address := 0
-  else if Pointer(FHW4.Address) = Address then
-    FHW4.Address := 0;
-
-  for T in FThreads.Values do
-    UpdateDR(T);
-end;
-
-function TDebugger.IsHWBreakpoint(Address: Pointer): Boolean;
-begin
-  Result := (Pointer(FHW1.Address) = Address) or (Pointer(FHW2.Address) = Address) or
-            (Pointer(FHW3.Address) = Address) or (Pointer(FHW4.Address) = Address);
-end;
-
-function TDebugger.RPM(Address: NativeUInt; Buf: Pointer; BufSize: NativeUInt): Boolean;
-begin
-  Result := ReadProcessMemory(FProcess.hProcess, Pointer(Address), Buf, BufSize, BufSize);
 end;
 
 function TDebugger.TMFinderCheck(C: PContext): Boolean;
@@ -1244,7 +770,7 @@ procedure TDebugger.TMIATFix4;
 var
   Res, Off: NativeUInt;
   Zech, Jumper, Jumper_x2: NativeUInt;
-  CC, B1, B2, B3, B4: Byte;
+  B1, B2, B3, B4: Byte;
   Valid: Boolean;
 begin
   Res := FindStaticTM('83F8500F82');
@@ -1332,13 +858,8 @@ begin
     begin
       if Valid then
       begin
-        CC := $CC;
-        RPM(Res, @B1, 1);
         Log(ltInfo, 'SetSoft: ' + IntToHex(Res, 8));
-        if WriteProcessMemory(FProcess.hProcess, PByte(Res), @CC, 1, Off) then
-          FSoftBPs.Add(Pointer(Res), B1)
-        else
-          raise Exception.Create('WPM failed!');
+        SetSoftBP(Pointer(Res));
       end;
 
       Inc(Res, 2);
@@ -1351,12 +872,8 @@ begin
   begin
     repeat
       Inc(Res, 3);
-      CC := $CC;
       Log(ltInfo, 'SetSoft : ' + IntToHex(Res, 8));
-      if WriteProcessMemory(FProcess.hProcess, PByte(Res), @CC, 1, Off) then
-        FSoftBPs.Add(Pointer(Res), $E9)
-      else
-        raise Exception.Create('WPM failed!');
+      SetSoftBP(Pointer(Res));
       Res := FindStaticTM('3BC89CE9', Res);
     until Res = 0;
   end;
@@ -1425,74 +942,6 @@ begin
   VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, FGuardProtection, OldProt);
 end;
 
-procedure TDebugger.UpdateDR(hThread: THandle);
-var
-  C: TContext;
-  Mask: Cardinal;
-begin
-  C.ContextFlags := CONTEXT_DEBUG_REGISTERS;
-  if GetThreadContext(hThread, C) then
-  begin
-    Mask := 0;
-
-    if FHW1.IsSet then
-    begin
-      C.Dr0 := FHW1.Address;
-      Mask := 1;
-    end
-    else
-      C.Dr0 := 0;
-
-    if FHW2.IsSet then
-    begin
-      C.Dr1 := FHW2.Address;
-      Mask := Mask or (1 shl 2);
-    end
-    else
-      C.Dr1 := 0;
-
-    if FHW3.IsSet then
-    begin
-      C.Dr2 := FHW3.Address;
-      Mask := Mask or (1 shl 4);
-    end
-    else
-      C.Dr2 := 0;
-
-    if FHW4.IsSet then
-    begin
-      C.Dr3 := FHW4.Address;
-      Mask := Mask or (1 shl 6);
-    end
-    else
-      C.Dr3 := 0;
-
-    C.Dr6 := C.Dr6 and $FFFFBFFF;
-    C.Dr7 := Mask or (UInt8(FHW1.BType) shl 16) or (UInt8(FHW2.BType) shl 20) or (UInt8(FHW3.BType) shl 24) or (UInt8(FHW4.BType) shl 28);
-    SetThreadContext(hThread, C);
-  end
-  else
-    Log(ltFatal, 'GetThreadContext failed');
-end;
-
-procedure TDebugger.FetchMemoryRegions;
-var
-  Address: NativeUInt;
-  mbi: _MEMORY_BASIC_INFORMATION;
-begin
-  Address := 0;
-  mbi.RegionSize := $1000;
-
-  while (VirtualQueryEx(FProcess.hProcess, Pointer(Address), mbi, SizeOf(mbi)) <> 0) and (Address + mbi.RegionSize > Address) do
-  begin
-    SetLength(FMemRegions, Length(FMemRegions) + 1);
-    FMemRegions[Length(FMemRegions) - 1].Address := NativeUInt(mbi.BaseAddress);
-    FMemRegions[Length(FMemRegions) - 1].Size := mbi.RegionSize;
-
-    Inc(Address, mbi.RegionSize);
-  end;
-end;
-
 function TDebugger.FindDynamicTM(const APattern: AnsiString; AOff: Cardinal): Cardinal;
 begin
   if AOff <> 0 then
@@ -1511,21 +960,6 @@ begin
   Result := FindStatic(APattern, TMSect + AOff, TMSectR.Size - AOff);
   if Result > 0 then
     Inc(Result, TMSectR.Address + AOff);
-end;
-
-procedure TDebugger.SoftBPClear;
-var
-  BP: TPair<Pointer, Byte>;
-  B: Byte;
-  x: NativeUInt;
-begin
-  for BP in FSoftBPs do
-  begin
-    B := BP.Value;
-    WriteProcessMemory(FProcess.hProcess, BP.Key, @B, 1, x);
-    FlushInstructionCache(FProcess.hProcess, BP.Key, 1);
-  end;
-  FSoftBPs.Clear;
 end;
 
 function TDebugger.IsTMExceptionHandler(Address: NativeUInt): Boolean;
@@ -1564,7 +998,7 @@ begin
   Result := (Address >= FGuardStart) and (Address < FGuardEnd);
 end;
 
-function TDebugger.ProcessGuardedAccess(hThread: THandle; var ExcRecord: TExceptionRecord): Cardinal;
+function TDebugger.ProcessGuardedAccess(hThread: THandle; const ExcRecord: TExceptionRecord): Cardinal;
 var
   OldProt, RetAddr: Cardinal;
   Args: array[0..2] of Cardinal;
@@ -2121,12 +1555,12 @@ begin
       Log(ltInfo, Format('Trace: %.8X [%.8X]', [IATData[i], IAT + i * SizeOf(Pointer)]));
 
       Ctx.ContextFlags := CONTEXT_CONTROL;
-      GetThreadContext(FThreads[FCurrentThreadID], Ctx);
+      GetThreadContext(Threads[FCurrentThreadID], Ctx);
       FTraceStartSP := Ctx.Esp;
 
       FTracedAPI := 0;
       FTraceInVM := False;
-      with TTracer.Create(FProcess.dwProcessId, FCurrentThreadID, FThreads[FCurrentThreadID], TraceIsAtAPI, Log) do
+      with TTracer.Create(FProcess.dwProcessId, FCurrentThreadID, Threads[FCurrentThreadID], TraceIsAtAPI, Log) do
         try
           // Normally a couple hundred suffice, but newer Themida v3 versions do some export directory walking...
           Trace(IATData[i], 500000);
@@ -2202,26 +1636,6 @@ begin
 
   if Result then
     FTracedAPI := C.Eip;
-end;
-
-{ TBreakpoint }
-
-procedure TBreakpoint.Change(AAddress: NativeUInt; AType: THWBPType);
-begin
-  Address := AAddress;
-  BType := AType;
-end;
-
-function TBreakpoint.IsSet: Boolean;
-begin
-  Result := not Disabled and (Address > 0);
-end;
-
-{ TMemoryRegion }
-
-function TMemoryRegion.Contains(Addr: NativeUInt): Boolean;
-begin
-  Result := (Addr >= Address) and (Addr < Address + Size);
 end;
 
 end.

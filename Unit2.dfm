@@ -36,8 +36,6 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
     SmallImages = ImageList1
     TabOrder = 1
     ViewStyle = vsReport
-    ExplicitWidth = 631
-    ExplicitHeight = 275
   end
   object btnShrink: TButton
     Left = 496
@@ -53,7 +51,6 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
     ShowHint = True
     TabOrder = 2
     OnClick = btnShrinkClick
-    ExplicitLeft = 492
   end
   object btnDumpProcess: TButton
     Left = 416
@@ -67,7 +64,6 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
     ShowHint = True
     TabOrder = 3
     OnClick = btnDumpProcessClick
-    ExplicitLeft = 412
   end
   object cbDataSections: TCheckBox
     Left = 112

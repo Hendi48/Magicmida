@@ -23,6 +23,7 @@ const
   STATUS_SUCCESS = Integer(0);
 
 type
+  // Windows structs
   TProcessBasicInformation = packed record
     ExitStatus: Cardinal;
     PebBaseAddress: Pointer;
@@ -42,10 +43,32 @@ type
     BasePriority: DWORD;
   end;
 
+  // Custom structs
+  TMemoryRegion = record
+    Address: NativeUInt;
+    Size: Cardinal;
+
+    constructor Create(AAddress: NativeUInt; ASize: Cardinal);
+    function Contains(AAddress: NativeUInt): Boolean;
+  end;
+
 function FindDynamic(const APattern: AnsiString; ABuf: PByte; ASize: Cardinal): Cardinal;
 function FindStatic(const APattern: AnsiString; ABuf: PByte; ASize: Cardinal): Cardinal;
 
 implementation
+
+{ TMemoryRegion }
+
+constructor TMemoryRegion.Create(AAddress: NativeUInt; ASize: Cardinal);
+begin
+  Address := AAddress;
+  Size := ASize;
+end;
+
+function TMemoryRegion.Contains(AAddress: NativeUInt): Boolean;
+begin
+  Result := (AAddress >= Address) and (AAddress < Address + Size);
+end;
 
 function FindDynamic(const APattern: AnsiString; ABuf: PByte; ASize: Cardinal): Cardinal;
 var

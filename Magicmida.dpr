@@ -15,7 +15,8 @@ uses
   Patcher in 'Patcher.pas',
   BeaEngineDelphi32 in 'BeaEngineDelphi32.pas',
   Tracer in 'Tracer.pas',
-  AntiDumpFix in 'AntiDumpFix.pas';
+  AntiDumpFix in 'AntiDumpFix.pas',
+  DebuggerCore in 'DebuggerCore.pas';
 
 {$R *.res}
 
