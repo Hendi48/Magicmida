@@ -117,7 +117,7 @@
         <DCCReference Include="Unit2.pas">
             <Form>ThemidaUnpackerWnd</Form>
         </DCCReference>
-        <DCCReference Include="Debugger.pas"/>
+        <DCCReference Include="Themida.pas"/>
         <DCCReference Include="Utils.pas"/>
         <DCCReference Include="Dumper.pas"/>
         <DCCReference Include="PEInfo.pas"/>

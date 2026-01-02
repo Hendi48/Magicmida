@@ -1,4 +1,4 @@
-unit Debugger;
+unit Themida;
 
 interface
 
@@ -10,7 +10,7 @@ type
     Original: TBytes;
   end;
 
-  TDebugger = class(TDebuggerCore)
+  TTMDebugger = class(TDebuggerCore)
   private
     FCreateDataSections: Boolean;
     FBaseOfData: NativeUInt;
@@ -89,7 +89,7 @@ uses BeaEngineDelphi32, ShellAPI, AntiDumpFix, Math;
 
 { TDebugger }
 
-constructor TDebugger.Create(const AExecutable, AParameters: string; ACreateData: Boolean);
+constructor TTMDebugger.Create(const AExecutable, AParameters: string; ACreateData: Boolean);
 begin
   FCreateDataSections := ACreateData;
 
@@ -98,14 +98,14 @@ begin
   inherited Create(AExecutable, AParameters, Utils.Log);
 end;
 
-destructor TDebugger.Destroy;
+destructor TTMDebugger.Destroy;
 begin
   FGuardAddrs.Free;
 
   inherited;
 end;
 
-function TDebugger.OnAccessViolation(hThread: THandle; const ExcRec: TExceptionRecord): Cardinal;
+function TTMDebugger.OnAccessViolation(hThread: THandle; const ExcRec: TExceptionRecord): Cardinal;
 begin
   if IsGuardedAddress(ExcRec.ExceptionInformation[1]) then
     Result := ProcessGuardedAccess(hThread, ExcRec)
@@ -113,7 +113,7 @@ begin
     Result := inherited;
 end;
 
-procedure TDebugger.OnDebugStart(var hPE: THandle; hThread: THandle);
+procedure TTMDebugger.OnDebugStart(var hPE: THandle; hThread: THandle);
 begin
   CloseHandleAPI := GetProcAddress(GetModuleHandle(kernel32), 'CloseHandle');
   SetBreakpoint(Cardinal(CloseHandleAPI), hwExecute, False);
@@ -155,7 +155,7 @@ end;
 const
   STATUS_PORT_NOT_SET = $C0000353;
 
-procedure TDebugger.OnHardwareBreakpoint(hThread: THandle; BPA: NativeUInt; var C: TContext);
+procedure TTMDebugger.OnHardwareBreakpoint(hThread: THandle; BPA: NativeUInt; var C: TContext);
 var
   EIP: Pointer;
   Buf, Buf2, WriteBuf, InfoClass: Cardinal;
@@ -310,7 +310,7 @@ begin
   end;
 end;
 
-function TDebugger.OnSinglestep(BPA: NativeUInt): Cardinal;
+function TTMDebugger.OnSinglestep(BPA: NativeUInt): Cardinal;
 var
   OldProt: NativeUInt;
 begin
@@ -324,7 +324,7 @@ begin
   Result := inherited;
 end;
 
-function TDebugger.OnSoftwareBreakpoint(hThread: THandle; BPA: Pointer): TSoftBPAction;
+function TTMDebugger.OnSoftwareBreakpoint(hThread: THandle; BPA: Pointer): TSoftBPAction;
 var
   x, Jumper, Res: NativeUInt;
   C: TContext;
@@ -449,7 +449,7 @@ begin
     raise Exception.CreateFmt('Disasm result: %d (EIP = %X)', [Result, Dis.EIP]);
 end;
 
-function TDebugger.InstallEFLPatch(EIP: Pointer; var C: TContext; var Rec: TEFLRecord): Boolean;
+function TTMDebugger.InstallEFLPatch(EIP: Pointer; var C: TContext; var Rec: TEFLRecord): Boolean;
 var
   Bases: array[0..2] of HMODULE;
   HookDest: Pointer;
@@ -556,7 +556,7 @@ begin
   Result := True;
 end;
 
-function TDebugger.TMFinderCheck(C: PContext): Boolean;
+function TTMDebugger.TMFinderCheck(C: PContext): Boolean;
 var
   Rep: Word;
   Tmp: NativeUInt;
@@ -571,7 +571,7 @@ end;
 
 {$POINTERMATH ON}
 
-procedure TDebugger.TMInit(var hPE: THandle);
+procedure TTMDebugger.TMInit(var hPE: THandle);
 var
   Buf, BufB, Test: PByte;
   x: Cardinal;
@@ -645,7 +645,7 @@ begin
   AllocHeapAPI := GetProcAddress(GetModuleHandle('ntdll.dll'), 'RtlAllocateHeap');
 end;
 
-procedure TDebugger.SelectThemidaSection(EIP: NativeUInt);
+procedure TTMDebugger.SelectThemidaSection(EIP: NativeUInt);
 const
   ANCIENT_NAME: PAnsiChar = 'Themida '; // default section name in late 2000s
 var
@@ -675,14 +675,14 @@ begin
     raise Exception.Create('FATAL NO DATA');
 end;
 
-procedure TDebugger.TMIATFix(EIP: NativeUInt);
+procedure TTMDebugger.TMIATFix(EIP: NativeUInt);
 begin
   SelectThemidaSection(EIP);
 
   TMIATFix2;
 end;
 
-procedure TDebugger.TMIATFix2;
+procedure TTMDebugger.TMIATFix2;
 var
   CompareJumpsNew, CmpEax10000: Cardinal;
 begin
@@ -716,7 +716,7 @@ begin
   end;
 end;
 
-procedure TDebugger.TMIATFix3(EIP: NativeUInt);
+procedure TTMDebugger.TMIATFix3(EIP: NativeUInt);
 var
   x: Cardinal;
 begin
@@ -737,7 +737,7 @@ begin
   end;
 end;
 
-function TDebugger.GetIATBPAddressNew(var Res: NativeUInt): Boolean;
+function TTMDebugger.GetIATBPAddressNew(var Res: NativeUInt): Boolean;
 var
   B: Byte;
   Dis: TDisasm;
@@ -766,7 +766,7 @@ begin
   Result := True;
 end;
 
-procedure TDebugger.TMIATFix4;
+procedure TTMDebugger.TMIATFix4;
 var
   Res, Off: NativeUInt;
   Zech, Jumper, Jumper_x2: NativeUInt;
@@ -885,7 +885,7 @@ begin
   SetBreakpoint(MJ_1, hwExecute);
 end;
 
-procedure TDebugger.TMIATFix5(Eax: NativeUInt);
+procedure TTMDebugger.TMIATFix5(Eax: NativeUInt);
 var
   Buf: UInt64;
   x: NativeUInt;
@@ -903,7 +903,7 @@ begin
   Log(ltGood, 'IAT Jumper was found & fixed at ' + IntToHex(IJumper, 8));
 end;
 
-procedure TDebugger.TMIATFixThemidaV1(BaseCompare1: NativeUInt);
+procedure TTMDebugger.TMIATFixThemidaV1(BaseCompare1: NativeUInt);
 var
   Buf: UInt64;
   BaseCompare2, BaseCompare3, x: NativeUInt;
@@ -942,7 +942,7 @@ begin
   VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, FGuardProtection, OldProt);
 end;
 
-function TDebugger.FindDynamicTM(const APattern: AnsiString; AOff: Cardinal): Cardinal;
+function TTMDebugger.FindDynamicTM(const APattern: AnsiString; AOff: Cardinal): Cardinal;
 begin
   if AOff <> 0 then
     Dec(AOff, TMSectR.Address);
@@ -952,7 +952,7 @@ begin
     Inc(Result, TMSectR.Address + AOff);
 end;
 
-function TDebugger.FindStaticTM(const APattern: AnsiString; AOff: Cardinal): Cardinal;
+function TTMDebugger.FindStaticTM(const APattern: AnsiString; AOff: Cardinal): Cardinal;
 begin
   if AOff <> 0 then
     Dec(AOff, TMSectR.Address);
@@ -962,7 +962,7 @@ begin
     Inc(Result, TMSectR.Address + AOff);
 end;
 
-function TDebugger.IsTMExceptionHandler(Address: NativeUInt): Boolean;
+function TTMDebugger.IsTMExceptionHandler(Address: NativeUInt): Boolean;
 var
   Data: array[0..63] of Byte;
   i: Integer;
@@ -977,7 +977,7 @@ begin
   Result := False;
 end;
 
-procedure TDebugger.InstallCodeSectionGuard(Protection: Cardinal);
+procedure TTMDebugger.InstallCodeSectionGuard(Protection: Cardinal);
 var
   OldProt: DWORD;
 begin
@@ -990,7 +990,7 @@ begin
     SetBreakpoint(NativeUInt(VirtualProtectAPI));
 end;
 
-function TDebugger.IsGuardedAddress(Address: NativeUInt): Boolean;
+function TTMDebugger.IsGuardedAddress(Address: NativeUInt): Boolean;
 begin
   if FGuardStart = 0 then
     Exit(False);
@@ -998,7 +998,7 @@ begin
   Result := (Address >= FGuardStart) and (Address < FGuardEnd);
 end;
 
-function TDebugger.ProcessGuardedAccess(hThread: THandle; const ExcRecord: TExceptionRecord): Cardinal;
+function TTMDebugger.ProcessGuardedAccess(hThread: THandle; const ExcRecord: TExceptionRecord): Cardinal;
 var
   OldProt, RetAddr: Cardinal;
   Args: array[0..2] of Cardinal;
@@ -1080,7 +1080,7 @@ OEPReached:
   Result := DBG_CONTINUE;
 end;
 
-procedure TDebugger.FinishUnpacking(OEP: NativeUInt);
+procedure TTMDebugger.FinishUnpacking(OEP: NativeUInt);
 var
   IAT: NativeUInt;
   i: Integer;
@@ -1150,7 +1150,7 @@ begin
   Log(ltGood, 'Operation completed successfully.');
 end;
 
-function TDebugger.DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
+function TTMDebugger.DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
 var
   TextBase, CodeSize, DataSize: NativeUInt;
   DataSectionIndex: Integer;
@@ -1341,7 +1341,7 @@ begin
     raise Exception.Create('IAT assertion failed');
 end;
 
-procedure TDebugger.FixupAPICallSites(IAT: NativeUInt);
+procedure TTMDebugger.FixupAPICallSites(IAT: NativeUInt);
 var
   i: Integer;
   SiteAddr, Target, NumWritten: NativeUInt;
@@ -1406,7 +1406,7 @@ begin
   SiteSet.Free;
 end;
 
-procedure TDebugger.RestoreStolenOEPForMSVC6(hThread: THandle; var OEP: NativeUInt);
+procedure TTMDebugger.RestoreStolenOEPForMSVC6(hThread: THandle; var OEP: NativeUInt);
 const
   RESTORE_DATA: array[0..45] of Byte = (
     $55, $8B, $EC, $6A, $FF,
@@ -1486,7 +1486,7 @@ begin
   Log(ltGood, 'Correct OEP: ' + IntToHex(OEP, 8));
 end;
 
-procedure TDebugger.CheckVirtualizedOEP(OEP: NativeUInt);
+procedure TTMDebugger.CheckVirtualizedOEP(OEP: NativeUInt);
 var
   Code: packed record
     Instr: Byte;
@@ -1501,7 +1501,7 @@ begin
   Log(ltInfo, 'OEP is virtualized (!): jmp ' + IntToHex(OEP + 5 + Code.Displ, 8));
 end;
 
-function TDebugger.TryFindCorrectOEP(OEP: NativeUInt): NativeUInt;
+function TTMDebugger.TryFindCorrectOEP(OEP: NativeUInt): NativeUInt;
 var
   TextBuf: PByte;
   TextLen: Integer;
@@ -1537,7 +1537,7 @@ begin
   end;
 end;
 
-procedure TDebugger.TraceImports(IAT: NativeUInt);
+procedure TTMDebugger.TraceImports(IAT: NativeUInt);
 var
   IATData: array[0..(MAX_IAT_SIZE div 4) - 1] of NativeUInt;
   i, OldProtect: Cardinal;
@@ -1602,7 +1602,7 @@ begin
     RaiseLastOSError;
 end;
 
-function TDebugger.TraceIsAtAPI(Tracer: TTracer; var C: TContext): Boolean;
+function TTMDebugger.TraceIsAtAPI(Tracer: TTracer; var C: TContext): Boolean;
 var
   ReturnAddr, InsnData: Cardinal;
 begin

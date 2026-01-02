@@ -67,8 +67,6 @@ type
 
 implementation
 
-uses Debugger;
-
 { TDumper }
 
 constructor TDumper.Create(const AProcess: TProcessInformation; AImageBase, AOEP: UIntPtr);

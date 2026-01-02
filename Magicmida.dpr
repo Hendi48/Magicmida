@@ -8,7 +8,7 @@ uses
   TypInfo,
   Vcl.Forms,
   Unit2 in 'Unit2.pas' {ThemidaUnpackerWnd},
-  Debugger in 'Debugger.pas',
+  Themida in 'Themida.pas',
   Utils in 'Utils.pas',
   Dumper in 'Dumper.pas',
   PEInfo in 'PEInfo.pas',
