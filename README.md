@@ -14,7 +14,7 @@ Important: Never activate any compatibility mode options for Magicmida or for th
 
 Windows sometimes decides to auto-apply compatibility patches to an executable if it crashed before. This AppCompat information is stored in the registry and is linked to the exact path of your executable. This can be a problem if you're upgrading to a newer Magicmida version that has fixes for your target. You can try moving your target to a different path or look around in the subkeys of `HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags`.
 
-Old targets from 2007-2009 often don't run on Windows 10 and require an older OS version to unpack. The unpacked binaries should then work on newer Windows versions, given that the application itself doesn't have incompatibilities.
+Old targets from 2007-2009 often don't unpack properly on modern Windows versions (this is the case if the process gets stuck on high CPU for more than 2 minutes); these unfortunately require Windows XP to unpack.
 
 ## Anti-anti-debugging
 

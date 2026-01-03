@@ -437,7 +437,10 @@ begin
     Log(ltGood, 'Special >> NEW << IAT Patch was written!');
   end;
 
-  InstallCodeSectionGuard(PAGE_READONLY); // Not using PAGE_NOACCESS here is a performance optimization for some targets (esp. MC1.14).
+  if not AncientVer then
+    InstallCodeSectionGuard(PAGE_READONLY) // Not using PAGE_NOACCESS here is a performance optimization for some targets (esp. MC1.14).
+  else
+    InstallCodeSectionGuard(PAGE_NOACCESS);
   Log(ltInfo, 'Please wait, call site tracing might take a while...');
 end;
 
@@ -1060,19 +1063,22 @@ OEPReached:
     RestoreStolenOEPForMSVC6(hThread, OEP);
     CheckVirtualizedOEP(OEP);
 
-    // Check if virtualized and stolen (goes straight into VM without using jmp in .text).
-    C.ContextFlags := CONTEXT_CONTROL;
-    if GetThreadContext(hThread, C) then
+    if not AncientVer then
     begin
-      RPM(C.Esp, @RetAddr, 4);
-      if TMSectR.Contains(RetAddr) and not IsTMExceptionHandler(RetAddr) then
+      // Check if virtualized and stolen (goes straight into VM without using jmp in .text).
+      C.ContextFlags := CONTEXT_CONTROL;
+      if GetThreadContext(hThread, C) then
       begin
-        Log(ltInfo, Format('OEP return address points into Themida section: %.8X', [RetAddr]));
-        OEP := TryFindCorrectOEP(OEP);
-      end;
-    end
-    else
-      Log(ltFatal, 'GetThreadContext failed for further OEP check');
+        RPM(C.Esp, @RetAddr, 4);
+        if TMSectR.Contains(RetAddr) and not IsTMExceptionHandler(RetAddr) then
+        begin
+          Log(ltInfo, Format('OEP return address points into Themida section: %.8X', [RetAddr]));
+          OEP := TryFindCorrectOEP(OEP);
+        end;
+      end
+      else
+        Log(ltFatal, 'GetThreadContext failed for further OEP check');
+    end;
 
     FinishUnpacking(OEP);
   end;
