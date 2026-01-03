@@ -249,7 +249,7 @@ begin
       Inc(C.Esp, 5 * 4); // 4 paramaters + ret
       C.Eip := Buf;
       C.Eax := STATUS_SUCCESS;
-      C.ContextFlags := CONTEXT_FULL;
+      C.ContextFlags := CONTEXT_CONTROL or CONTEXT_INTEGER;
       if not SetThreadContext(hThread, C) then
         Log(ltFatal, '[NtSetInformationThread] SetContextThread');
     end;
@@ -271,7 +271,7 @@ begin
         C.Eax := STATUS_SUCCESS
       else
         C.Eax := STATUS_PORT_NOT_SET;
-      C.ContextFlags := CONTEXT_FULL;
+      C.ContextFlags := CONTEXT_CONTROL or CONTEXT_INTEGER;
       if not SetThreadContext(hThread, C) then
         Log(ltFatal, '[KiFastSystemCall] SetContextThread');
     end;
