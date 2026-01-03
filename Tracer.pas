@@ -62,7 +62,7 @@ begin
   if not GetThreadContext(FThreadHandle, C) then
     RaiseLastOSError;
 
-  C.Eip := AAddress;
+  {$IFDEF CPUX86}C.Eip{$ELSE}C.Rip{$ENDIF} := AAddress;
   C.EFlags := C.EFlags or $100; // Trap
   if not SetThreadContext(FThreadHandle, C) then
     RaiseLastOSError;

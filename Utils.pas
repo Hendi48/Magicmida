@@ -24,21 +24,21 @@ const
 
 type
   // Windows structs
-  TProcessBasicInformation = packed record
+  TProcessBasicInformation = record
     ExitStatus: Cardinal;
     PebBaseAddress: Pointer;
-    AffinityMask: PULONG;
+    AffinityMask: UIntPtr;
     BasePriority: DWORD;
-    UniqueProcessId: ULONG;
-    InheritedFromUniqueProcessId: ULONG;
+    UniqueProcessId: UIntPtr;
+    InheritedFromUniqueProcessId: UIntPtr;
   end;
 
-  TThreadBasicInformation = packed record
+  TThreadBasicInformation = record
     ExitStatus: Cardinal;
     TebBaseAddress: Pointer;
     UniqueProcess: THandle;
     UniqueThread: THandle;
-    AffinityMask: PULONG;
+    AffinityMask: UIntPtr;
     Priority: DWORD;
     BasePriority: DWORD;
   end;
@@ -52,6 +52,7 @@ type
     function Contains(AAddress: NativeUInt): Boolean;
   end;
 
+function AccessViolationFlagToStr(Flag: Byte): string;
 function FindDynamic(const APattern: AnsiString; ABuf: PByte; ASize: Cardinal): Cardinal;
 function FindStatic(const APattern: AnsiString; ABuf: PByte; ASize: Cardinal): Cardinal;
 
@@ -68,6 +69,16 @@ end;
 function TMemoryRegion.Contains(AAddress: NativeUInt): Boolean;
 begin
   Result := (AAddress >= Address) and (AAddress < Address + Size);
+end;
+
+function AccessViolationFlagToStr(Flag: Byte): string;
+begin
+  case Flag of
+    0: Result := 'Read';
+    1: Result := 'Write';
+    8: Result := 'Execute';
+    else Result := IntToStr(Flag);
+  end;
 end;
 
 function FindDynamic(const APattern: AnsiString; ABuf: PByte; ASize: Cardinal): Cardinal;

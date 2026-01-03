@@ -262,11 +262,14 @@ end;
 
 function TDebuggerCore.OnAccessViolation(hThread: THandle; const ExcRec: TExceptionRecord): Cardinal;
 begin
-  Log(ltInfo, Format('Access violation at 0x%p', [ExcRec.ExceptionAddress]));
+  Log(ltInfo, Format('[%d] Access violation at 0x%p: %s of 0x%p', [FCurrentThreadID, ExcRec.ExceptionAddress, AccessViolationFlagToStr(ExcRec.ExceptionInformation[0]), Pointer(ExcRec.ExceptionInformation[1])]));
   Result := DBG_EXCEPTION_NOT_HANDLED;
 end;
 
 function TDebuggerCore.OnCreateProcessDebugEvent(var DebugEv: TDebugEvent): DWORD;
+const
+  OFFSET_IMAGEBASE = {$IFDEF CPUX86} 8 {$ELSE} 16 {$ENDIF};
+  OFFSET_SHIMDATA = {$IFDEF CPUX86} $1E8 {$ELSE} $2D8 {$ENDIF};
 var
   pbi: TProcessBasicInformation;
   Buf: Cardinal;
@@ -292,15 +295,15 @@ begin
   else
     Log(ltFatal, 'Reading PEB failed');
 
-  if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + 8, @FImageBase, 4, x) then
+  if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + OFFSET_IMAGEBASE, @FImageBase, SizeOf(FImageBase), x) then
   begin
     Log(ltInfo, 'Process Image Base: ' + IntToHex(FImageBase, 8));
   end;
 
-  if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + $1E8, @Buf, 4, x) and (Buf <> 0) then
+  if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + OFFSET_SHIMDATA, @Buf, 4, x) and (Buf <> 0) then
   begin
     Buf := 0;
-    if WriteProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + $1E8, @Buf, 4, x) then
+    if WriteProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + OFFSET_SHIMDATA, @Buf, 4, x) then
       Log(ltInfo, 'Cleared PEB.pShimData to prevent apphelp hooks');
   end;
 
@@ -649,7 +652,7 @@ begin
 
   C.ContextFlags := CONTEXT_CONTROL;
   GetThreadContext(hThread, C);
-  Dec(C.Eip);
+  Dec({$IFDEF CPUX86}C.Eip{$ELSE}C.Rip{$ENDIF});
   SetThreadContext(hThread, C);
 
   B := FSoftBPs[EIP];
@@ -665,7 +668,7 @@ begin
   end
   else if Action = sbpKeepContinue then // Keep, single step
   begin
-    FSoftBPReenable := C.Eip;
+    FSoftBPReenable := {$IFDEF CPUX86}C.Eip{$ELSE}C.Rip{$ENDIF};
     C.EFlags := C.EFlags or $100;
     SetThreadContext(hThread, C);
   end
