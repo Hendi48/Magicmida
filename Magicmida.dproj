@@ -120,9 +120,9 @@
         <DCCReference Include="Themida.pas"/>
         <DCCReference Include="Utils.pas"/>
         <DCCReference Include="Dumper.pas"/>
-        <DCCReference Include="PEInfo.pas"/>
         <DCCReference Include="Patcher.pas"/>
-        <DCCReference Include="BeaEngineDelphi32.pas"/>
+        <DCCReference Include="PEInfo.pas"/>
+        <DCCReference Include="BeaEngineDelphi.pas"/>
         <DCCReference Include="Tracer.pas"/>
         <DCCReference Include="AntiDumpFix.pas"/>
         <DCCReference Include="DebuggerCore.pas"/>

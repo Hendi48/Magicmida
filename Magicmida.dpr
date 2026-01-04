@@ -11,9 +11,9 @@ uses
   Themida in 'Themida.pas',
   Utils in 'Utils.pas',
   Dumper in 'Dumper.pas',
-  PEInfo in 'PEInfo.pas',
   Patcher in 'Patcher.pas',
-  BeaEngineDelphi32 in 'BeaEngineDelphi32.pas',
+  PEInfo in 'PEInfo.pas',
+  BeaEngineDelphi in 'BeaEngineDelphi.pas',
   Tracer in 'Tracer.pas',
   AntiDumpFix in 'AntiDumpFix.pas',
   DebuggerCore in 'DebuggerCore.pas';

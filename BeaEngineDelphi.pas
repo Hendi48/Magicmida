@@ -8,7 +8,7 @@
 // BeaEngine.pas convert by Vince
 // updated by kao, Hendi
 // ====================================================================
-unit BeaEngineDelphi32;
+unit BeaEngineDelphi;
 // ====================================================================
 // Default link type is static lib
 // comment below line to switch link with DLL

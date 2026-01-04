@@ -37,3 +37,15 @@ To get around this, you need to perform the following steps:
 1. In my case, I also had to manually copy the cert to the "Trusted Root Certificate" store.
 1. Run `signtool.exe sign /s MMTestCert Magicmida.exe`.
 1. Copy Magicmida to `C:\Program Files (x86)\Magicmida` and run it from there. This step is important because uiAccess applications need to be in a "trusted location".
+
+## Building
+
+Magicmida can be built with the latest and second-to-latest versions of Delphi Community Edition.
+
+The BeaEngine object files are built from my [fork](https://github.com/Hendi48/beaengine) of BeaEngine 5.1. There's typically no reason to rebuild them.
+
+## License
+
+Magicmida is licensed under GPLv3.
+
+The [BeaEngine](https://github.com/BeaEngine/beaengine) object and header files are licensed under LGPLv3.

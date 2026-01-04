@@ -85,7 +85,7 @@ type
 
 implementation
 
-uses BeaEngineDelphi32, ShellAPI, AntiDumpFix, Math;
+uses BeaEngineDelphi, ShellAPI, AntiDumpFix, Math;
 
 { TDebugger }
 
@@ -448,7 +448,7 @@ function DisasmCheck(var Dis: TDisasm): Integer;
 begin
   Dis.Archi := 32;
   Result := Disasm(Dis);
-  if (Result = BeaEngineDelphi32.UNKNOWN_OPCODE) or (Result = BeaEngineDelphi32.OUT_OF_BLOCK) then
+  if (Result = UNKNOWN_OPCODE) or (Result = OUT_OF_BLOCK) then
     raise Exception.CreateFmt('Disasm result: %d (EIP = %X)', [Result, Dis.EIP]);
 end;
 
