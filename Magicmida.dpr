@@ -8,10 +8,15 @@ uses
   TypInfo,
   Vcl.Forms,
   Unit2 in 'Unit2.pas' {ThemidaUnpackerWnd},
+  {$IFDEF CPUX86}
   Themida in 'Themida.pas',
+  Patcher in 'Patcher.pas',
+  {$ENDIF }
+  {$IFDEF CPUX64}
+  Themida64 in 'Themida64.pas',
+  {$ENDIF }
   Utils in 'Utils.pas',
   Dumper in 'Dumper.pas',
-  Patcher in 'Patcher.pas',
   PEInfo in 'PEInfo.pas',
   BeaEngineDelphi in 'BeaEngineDelphi.pas',
   Tracer in 'Tracer.pas',
@@ -43,7 +48,7 @@ begin
     end;
 
     try
-      with TDebugger.Create(ParamStr(2), '', True) do
+      with {$IFDEF CPUX86}TTMDebugger{$ELSE}TTMDebugger64{$ENDIF}.Create(ParamStr(2), '', True) do
         try
           WaitFor;
         finally

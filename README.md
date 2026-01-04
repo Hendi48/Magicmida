@@ -1,6 +1,8 @@
 # Magicmida
 
-Magicmida is a Themida auto unpacker that works on some 32-bit applications.
+Magicmida is a Themida auto unpacker for 32-bit and 64-bit applications.
+
+Support for 64-bit is not very fleshed out yet and may only work when weaker protection options were used.
 
 Functions:
 * Unpack: Unpacks the binary you select. The unpacked binary will be saved with an `U` suffix.

@@ -403,7 +403,7 @@ begin
     DLL := '?'
   else
     DLL := string(WideString(szBuffer));
-  Log(ltInfo, Format('[%.8X] Loaded %s', [Cardinal(DebugEv.LoadDll.lpBaseOfDll), DLL]));
+  Log(ltInfo, Format('[%.8X] Loaded %s', [UIntPtr(DebugEv.LoadDll.lpBaseOfDll), DLL]));
   if Pos('aclayers.dll', LowerCase(DLL)) > 0 then
     raise Exception.Create('[FATAL] Compatibility mode screws up the unpacking process.');
   Result := DBG_CONTINUE;

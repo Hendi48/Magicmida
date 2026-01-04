@@ -4,8 +4,8 @@ interface
 
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics,
-  Controls, Forms, Dialogs, StdCtrls, Themida, ComCtrls, ImgList, Utils, System.ImageList,
-  Vcl.Menus;
+  Controls, Forms, Dialogs, StdCtrls, ComCtrls, ImgList, Utils, System.ImageList,
+  Vcl.Menus, {$IFNDEF CPUX64}Themida, Patcher{$ELSE}Themida64{$ENDIF};
 
 type
   TThemidaUnpackerWnd = class(TForm)
@@ -32,8 +32,6 @@ var
 
 implementation
 
-uses Patcher;
-
 {$R *.dfm}
 
 procedure GUILog(MsgType: TLogMsgType; const Msg: string);
@@ -44,28 +42,37 @@ end;
 procedure TThemidaUnpackerWnd.FormCreate(Sender: TObject);
 begin
   Utils.Log := GUILog;
+  {$IFDEF CPUX64}
+  btnDumpProcess.Visible := False;
+  btnShrink.Visible := False;
+  cbDataSections.Visible := False;
+  Caption := Caption + '64';
+  {$ENDIF}
 end;
 
 procedure TThemidaUnpackerWnd.btnUnpackClick(Sender: TObject);
 begin
   if OD.Execute then
   begin
-    TDebugger.Create(OD.FileName, '', cbDataSections.Checked).FreeOnTerminate := True;
+    {$IFDEF CPUX86}TTMDebugger{$ELSE}TTMDebugger64{$ENDIF}.Create(OD.FileName, '', cbDataSections.Checked).FreeOnTerminate := True;
   end;
 end;
 
 procedure TThemidaUnpackerWnd.btnShrinkClick(Sender: TObject);
 begin
+  {$IFDEF CPUX86}
   if OD.Execute then
     with TPatcher.Create(OD.FileName) do
     begin
       ProcessShrink();
       Free;
     end;
+  {$ENDIF}
 end;
 
 procedure TThemidaUnpackerWnd.miCreateSectionsNowClick(Sender: TObject);
 begin
+  {$IFDEF CPUX86}
   if OD.Execute then
     with TPatcher.Create(OD.FileName) do
     begin
@@ -75,9 +82,11 @@ begin
         Free;
       end;
     end;
+  {$ENDIF}
 end;
 
 procedure TThemidaUnpackerWnd.btnDumpProcessClick(Sender: TObject);
+{$IFDEF CPUX86}
 var
   PIDInput: string;
   PID: NativeInt;
@@ -103,6 +112,10 @@ begin
       end;
     end;
 end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
 
 procedure TThemidaUnpackerWnd.Log(MsgType: TLogMsgType; const Msg: string);
 begin
