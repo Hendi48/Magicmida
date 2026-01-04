@@ -257,6 +257,7 @@ var
   NeedNewThunk, Found: Boolean;
   RM: PRemoteModule;
   s: AnsiString;
+  OrdIndex: Cardinal;
   Section, Strs, RangeChecker: PByte;
   Descriptors: PImageImportDescriptor;
   ImportSect: PPESection;
@@ -305,6 +306,7 @@ begin
     // Type 2: a^ is correct for export lookup, but need to look in different module! (ntdll --> user32)
     if FForwardsType2.TryGetValue(a^, Fwd) then
     begin
+      {$IFDEF CPUX64}a^ := Fwd;{$ENDIF}
       RangeChecker := Fwd;
     end
     else
@@ -376,8 +378,15 @@ begin
     Log(ltInfo, 'Thunk ' + Thunk.Name + ' - first import: ' + RM.ExportTbl[Thunk.Addresses.First^]);
     for j := 0 to Thunk.Addresses.Count - 1 do
     begin
-      Inc(Strs, 2); // Hint
       s := AnsiString(RM.ExportTbl[Thunk.Addresses[j]^]);
+      if s[1] = '#' then
+      begin
+        OrdIndex := StrToInt(Copy(string(s), 2, 5));
+        Thunk.Addresses[j]^ := Pointer(IMAGE_ORDINAL_FLAG or OrdIndex);
+        Continue;
+      end;
+
+      Inc(Strs, 2); // Hint
       // Set the address in the IAT to this string entry
       Thunk.Addresses[j]^ := Pointer(PE.ConvertOffsetToRVAVector(ImportSect.Header.PointerToRawData + Cardinal(Strs - 2 - Section)));
       Move(s[1], Strs^, Length(s));
@@ -421,6 +430,8 @@ var
   a, n: PCardinal;
   o: PWord;
   i: Integer;
+  Named: array of Boolean;
+  FuncIndex: Cardinal;
 begin
   M.ExportTbl := TExportTable.Create;
   GetMem(Head, $1000);
@@ -436,9 +447,23 @@ begin
   Pointer(a) := Off + Exp.AddressOfFunctions;
   Pointer(n) := Off + Exp.AddressOfNames;
   Pointer(o) := Off + Exp.AddressOfNameOrdinals;
+
+  SetLength(Named, Exp.NumberOfFunctions);
+  FillChar(Named[0], Length(Named) * SizeOf(Boolean), 0);
+
   for i := 0 to Exp.NumberOfNames - 1 do
   begin
-    M.ExportTbl.AddOrSetValue(M.Base + a[o[i]], string(AnsiString(PAnsiChar(Off + n[i]))));
+    FuncIndex := o[i];
+    Named[FuncIndex] := True;
+    M.ExportTbl.AddOrSetValue(M.Base + a[FuncIndex], string(AnsiString(PAnsiChar(Off + n[i]))));
+  end;
+  for i := 0 to Exp.NumberOfFunctions - 1 do
+  begin
+    if not Named[i] then
+    begin
+      FuncIndex := Exp.Base + UInt32(i);
+      M.ExportTbl.AddOrSetValue(M.Base + a[i], '#' + IntToStr(FuncIndex));
+    end;
   end;
 
   FreeMem(Exp);
