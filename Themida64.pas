@@ -10,6 +10,7 @@ type
     FBaseOfData: UIntPtr;
     FImageBoundary: UIntPtr;
     FPESections: array of TImageSectionHeader;
+    FMajorLinkerVersion: Byte;
     FCreateDataSections: Boolean;
 
     // Themida
@@ -20,8 +21,10 @@ type
     BaseAccessed: Boolean;
 
     FGuardStart, FGuardEnd: NativeUInt;
-    FGuardStepping, FTMGuard: Boolean;
+    FGuardStepping, FTMGuard, FTraceMSVCOEP: Boolean;
     FGuardAddrs: TList<NativeUInt>;
+
+    FMSVCInitCookie, FMSVCOEP: NativeUInt;
 
     FTLSCounter, FTLSTotal: Integer;
 
@@ -41,6 +44,9 @@ type
 
     function DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
     procedure FinishUnpacking(OEP: NativeUInt);
+
+    function TryFindCorrectOEP(HitAddress: NativeUInt): NativeUInt;
+    procedure WriteMSVCOEP(CRTStartup: UIntPtr);
   protected
     procedure OnDebugStart(var hPE: THandle; hThread: THandle); override;
     function OnAccessViolation(hThread: THandle; const ExcRec: TExceptionRecord): Cardinal; override;
@@ -295,6 +301,7 @@ begin
     FPESections[x] := Sect[x];
 
   FBaseOfData := Sect[0].VirtualAddress + PImageNTHeaders(Buf).OptionalHeader.SizeOfCode;
+  FMajorLinkerVersion := PImageNTHeaders(Buf).OptionalHeader.MajorLinkerVersion;
   Base1 := Sect[0].Misc.VirtualSize;
 
   // PE Header Antidump
@@ -387,7 +394,7 @@ end;
 function TTMDebugger64.ProcessGuardedAccess(hThread: THandle; const ExcRecord: TExceptionRecord): Cardinal;
 var
   OldProt: Cardinal;
-  OEP: NativeUInt;
+  OEP, RetAddr: NativeUInt;
   C: TContext;
 begin
   Log(ltInfo, Format('[Guard] %s %X', [AccessViolationFlagToStr(ExcRecord.ExceptionInformation[0]), ExcRecord.ExceptionInformation[1]]));
@@ -418,20 +425,126 @@ begin
   begin
     Inc(FTLSCounter);
     Log(ltGood, Format('TLS %d: %.8X', [FTLSCounter, UIntPtr(ExcRecord.ExceptionAddress), 8]));
-    FGuardStart := FImageBase + FPESections[High(FPESections) - 1].VirtualAddress;
+    FGuardStart := TMSectR.Address;
     FGuardEnd := FImageBoundary;
     FTMGuard := True;
     VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, OldProt);
   end
+  else if FTraceMSVCOEP then
+  begin
+    // We're at mainCrtStartup.
+    WriteMSVCOEP(UIntPtr(ExcRecord.ExceptionAddress));
+    FinishUnpacking(FMSVCOEP);
+  end
   else
   begin
     OEP := NativeUInt(ExcRecord.ExceptionAddress);
-    Log(ltGood, 'OEP: ' + IntToHex(OEP, 8));
+
+    // Check if virtualized and stolen (goes straight into VM without using jmp in .text).
+    C.ContextFlags := CONTEXT_CONTROL;
+    if GetThreadContext(hThread, C) then
+    begin
+      RPM(C.Rsp, @RetAddr, 8);
+      if TMSectR.Contains(RetAddr) {and not IsTMExceptionHandler(RetAddr)} then
+      begin
+        Log(ltInfo, Format('Return address points into Themida section: %.9X', [RetAddr]));
+        OEP := TryFindCorrectOEP(OEP);
+
+        if FTraceMSVCOEP then
+        begin
+          FMSVCOEP := OEP;
+
+          // Skip and wait for next .text hit.
+          C.Rip := RetAddr;
+          Inc(C.Rsp, 8);
+          if not SetThreadContext(hThread, C) then
+            RaiseLastOSError;
+
+          InstallCodeSectionGuard;
+          Exit(DBG_CONTINUE);
+        end;
+      end
+      else
+        Log(ltGood, 'OEP: ' + IntToHex(OEP, 8));
+    end
+    else
+      Log(ltFatal, 'GetThreadContext failed for further OEP check');
 
     FinishUnpacking(OEP);
   end;
 
   Result := DBG_CONTINUE;
+end;
+
+function TTMDebugger64.TryFindCorrectOEP(HitAddress: NativeUInt): NativeUInt;
+var
+  TextBuf: PByte;
+  TextLen: Integer;
+  i: Cardinal;
+  ScanFor: Cardinal;
+  OEP: NativeUInt;
+begin
+  Result := HitAddress;
+  if not (FMajorLinkerVersion in [9, 10, 11, 12, 14]) then
+  begin
+    Log(ltFatal, 'Don''t know what to do about OEP for this compiler. Your target likely won''t run.');
+    Exit;
+  end;
+
+  // MSVC: Assume HitAddress is at __security_init_cookie.
+  // Scan for call __security_init_cookie; jmp __scrt_common_main_seh
+  TextLen := FBaseOfData - FPESections[0].VirtualAddress;
+  GetMem(TextBuf, TextLen);
+  try
+    RPM(FImageBase + FPESections[0].VirtualAddress, TextBuf, TextLen);
+
+    ScanFor := HitAddress - FImageBase - FPESections[0].VirtualAddress;
+    for i := 0 to TextLen - 10 do
+      if (TextBuf[i] = $E8) and (TextBuf[i + 5] = $E9) and (PCardinal(@TextBuf[i + 1])^ + i + 5 = ScanFor) then
+      begin
+        OEP := FImageBase + FPESections[0].VirtualAddress + i;
+        Log(ltGood, Format('Found suitable real OEP %.9X', [OEP]));
+        Exit(OEP);
+      end;
+
+    // Got two suspicious reads as last accesses, checking out the VM jmp at OEP?
+    if (FGuardAddrs.Count >= 2) and (FGuardAddrs.Last = FGuardAddrs[FGuardAddrs.Count - 2] + 1) then
+    begin
+      FMSVCInitCookie := HitAddress;
+      FTraceMSVCOEP := True;
+      Exit(FGuardAddrs[FGuardAddrs.Count - 2]);
+    end;
+
+    Log(ltFatal, 'Real OEP not found. Your target likely won''t run.');
+  finally
+    FreeMem(TextBuf);
+  end;
+end;
+
+procedure TTMDebugger64.WriteMSVCOEP(CRTStartup: UIntPtr);
+var
+  x: NativeUInt;
+  Instrs: packed record
+    SubRsp: UInt32;
+    Call: Byte;
+    CallRel: Integer;
+    AddRsp: UInt32;
+    Jmp: Byte;
+    JmpRel: Integer;
+  end;
+begin
+  VirtualProtectEx(FProcess.hProcess, Pointer(FMSVCOEP), SizeOf(Instrs), PAGE_EXECUTE_READWRITE, @x);
+
+  Instrs.SubRsp := $28EC8348;
+  Instrs.Call := $E8;
+  Instrs.CallRel := FMSVCInitCookie - (FMSVCOEP + 4) - 5;
+  Instrs.AddRsp := $28C48348;
+  Instrs.Jmp := $E9;
+  Instrs.JmpRel := CRTStartup - (FMSVCOEP + 4+5+4) - 5;
+
+  WriteProcessMemory(FProcess.hProcess, Pointer(FMSVCOEP), @Instrs, SizeOf(Instrs), x);
+
+  Log(ltGood, Format('Virtualized MSVC9+ OEP restored: %X', [FMSVCOEP]));
 end;
 
 procedure TTMDebugger64.FinishUnpacking(OEP: NativeUInt);
