@@ -60,6 +60,7 @@ type
     function Process: TPEHeader;
     procedure DumpToFile(const FileName: string; PE: TPEHeader);
 
+    function DetermineIATSize(IAT: PByte): UInt32;
     function IsAPIAddress(Address: NativeUInt): Boolean;
 
     property IAT: NativeUInt read FIAT write FIAT; // Virtual address of IAT in target
@@ -243,12 +244,28 @@ end;
 
 {$POINTERMATH ON}
 
+function TDumper.DetermineIATSize(IAT: PByte): UInt32;
+var
+  LastValidOffset, i: UInt32;
+begin
+  LastValidOffset := 0;
+  i := 0;
+  while (i < MAX_IAT_SIZE) and ((LastValidOffset = 0) or (i < LastValidOffset + $100)) do
+  begin
+    if IsAPIAddress(PNativeUInt(IAT + i)^) then
+      LastValidOffset := i;
+
+    Inc(i, SizeOf(Pointer));
+  end;
+
+  Result := LastValidOffset + SizeOf(Pointer);
+end;
+
 function TDumper.Process: TPEHeader;
 var
   IAT: PByte;
   i, j: Integer;
   IATSize, Diff: Cardinal;
-  LastValidOffset: NativeUInt;
   PE: TPEHeader;
   a: ^PByte;
   Fwd: Pointer;
@@ -275,17 +292,7 @@ begin
   GetMem(IAT, MAX_IAT_SIZE);
   RPM(FIAT, IAT, MAX_IAT_SIZE);
 
-  LastValidOffset := 0;
-  i := 0;
-  while (i < MAX_IAT_SIZE) and ((LastValidOffset = 0) or (NativeUInt(i) < LastValidOffset + $100)) do
-  begin
-    if IsAPIAddress(PNativeUInt(IAT + i)^) then
-      LastValidOffset := NativeUInt(i);
-
-    Inc(i, SizeOf(Pointer));
-  end;
-
-  IATSize := LastValidOffset + SizeOf(Pointer);
+  IATSize := DetermineIATSize(IAT);
   Log(ltInfo, Format('Determined IAT size: %X', [IATSize]));
 
   with PE.NTHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT] do

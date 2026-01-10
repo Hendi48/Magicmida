@@ -31,6 +31,7 @@ type
 
     function FindDynamicTM(const APattern: AnsiString; AOff: Cardinal = 0): Cardinal;
     function FindStaticTM(const APattern: AnsiString; AOff: Cardinal = 0): Cardinal;
+    procedure SelectThemidaSection(Address: NativeUInt);
     procedure TMInit(var hPE: THandle);
     function TMFinderCheck(C: PContext): Boolean;
 
@@ -83,6 +84,29 @@ end;
 function TTMDebugger64.InImageBounds(Address: UIntPtr): Boolean;
 begin
   Result := (Address >= FImageBase) and (Address < FImageBoundary);
+end;
+
+procedure TTMDebugger64.SelectThemidaSection(Address: NativeUInt);
+var
+  i: Integer;
+begin
+  for i := 0 to High(FPESections) do
+    if (Address >= FPESections[i].VirtualAddress + FImageBase) and (Address < FPESections[i].VirtualAddress + FPESections[i].Misc.VirtualSize + FImageBase) then
+    begin
+      TMSectR.Address := FPESections[i].VirtualAddress + FImageBase;
+      TMSectR.Size := FPESections[i].Misc.VirtualSize;
+      GetMem(TMSect, TMSectR.Size);
+      if not RPM(TMSectR.Address, TMSect, TMSectR.Size) then
+      begin
+        FreeMem(TMSect);
+        TMSect := nil;
+      end;
+      Log(ltInfo, Format('TMSect: %X (%d bytes)', [TMSectR.Address, TMSectR.Size]));
+      Break;
+    end;
+
+  if TMSect = nil then
+    raise Exception.CreateFmt('Unable to find section for %X', [Address]);
 end;
 
 procedure TTMDebugger64.OnDebugStart(var hPE: THandle; hThread: THandle);
@@ -370,6 +394,9 @@ begin
 
   VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_EXECUTE_READWRITE, OldProt);
 
+  if TMSectR.Address = 0 then
+    SelectThemidaSection(UIntPtr(ExcRecord.ExceptionAddress));
+
   if FTMGuard then
   begin
     // We've hit the Themida section after executing a TLS entypoint.
@@ -459,7 +486,7 @@ var
       if (PByte(Dis.EIP)^ = $E8) and not IgnoreMethodBoundary then // call
       begin
         if Dis.Instruction.AddrValue > TextBase + CodeSize then
-          Exit(0); // Probably direct API call. Handled below via FGuardAddrs.
+          Exit(0);
 
         Result := FindCallOrJmpPtr(Dis.Instruction.AddrValue);
         if Result <> 0 then
@@ -476,9 +503,10 @@ var
   end;
 
 var
-  IATRef, Seeker: NativeUInt;
-  IATData: array[0..1023] of NativeUInt;
-  i: Integer;
+  IATRef, Seeker, CurAddress, x: NativeUInt;
+  IATData: array[0..(MAX_IAT_SIZE div SizeOf(Pointer))-1] of NativeUInt;
+  i: Cardinal;
+  WroteExitProcess: Boolean;
 begin
   // For MSVC, the IAT often resides at FImageBase + FBaseOfData
   // Other compilers such as Delphi use a dedicated .idata section, but the IAT doesn't start directly at the beginning, so some guesswork is needed
@@ -500,7 +528,7 @@ begin
     if IATRef = 0 then
       raise Exception.Create('Unable to obtain IAT reference');
 
-    Log(ltGood, 'First IAT ref: ' + IntToHex(IATRef, 8));
+    Log(ltInfo, 'First IAT ref: ' + IntToHex(IATRef, 8));
   finally
     FreeMem(CodeDump);
   end;
@@ -514,6 +542,27 @@ begin
       Inc(Seeker, SizeOf(NativeUInt))
     else
       Break; // Let's hope we didn't randomly stumble upon a valid API address somewhere before the IAT.
+  end;
+
+  // ExitProcess is often redirected to Themida VM in new versions.
+  WroteExitProcess := False;
+  RPM(Seeker, @IATData, SizeOf(IATData));
+  for i := 0 to (Dumper.DetermineIATSize(@IATData[0]) div SizeOf(Pointer)) - 1 do
+  begin
+    if TMSectR.Contains(IATData[i]) then
+    begin
+      CurAddress := Seeker + i * SizeOf(UIntPtr);
+      if WroteExitProcess then
+      begin
+        Log(ltFatal, Format('Encountered another Themida IAT pointer at %X', [CurAddress]));
+        Continue;
+      end;
+      Log(ltInfo, Format('Replacing redirect [IAT]%X->[VM]%X with ExitProcess', [CurAddress, IATData[i]]));
+      IATData[i] := UIntPtr(GetProcAddress(GetModuleHandle(kernel32), 'ExitProcess'));
+      VirtualProtectEx(FProcess.hProcess, Pointer(CurAddress), SizeOf(UIntPtr), PAGE_READWRITE, @x);
+      WriteProcessMemory(FProcess.hProcess, Pointer(CurAddress), @IATData[i], SizeOf(UIntPtr), x);
+      WroteExitProcess := True;
+    end;
   end;
 
   Result := Seeker;
