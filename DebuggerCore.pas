@@ -252,7 +252,7 @@ end;
 
 function TDebuggerCore.OnCreateThreadDebugEvent(var DebugEv: TDebugEvent): DWORD;
 begin
-  Log(ltInfo, Format('[%.4d] Thread started (%p).', [DebugEv.dwThreadId, DebugEv.CreateThread.lpStartAddress]));
+  Log(ltInfo, Format('[%.4d] Thread started (%p).', [DebugEv.dwThreadId, {$IFDEF FPC}@{$ENDIF}DebugEv.CreateThread.lpStartAddress]));
 
   FThreads.Add(DebugEv.dwThreadId, DebugEv.CreateThread.hThread);
   UpdateDR(DebugEv.CreateThread.hThread);
@@ -633,9 +633,9 @@ var
   OldProt: DWORD;
   x: NativeUInt;
 begin
-  Result := VirtualProtectEx(FProcess.hProcess, Address, 1, PAGE_EXECUTE_READWRITE, OldProt) and
+  Result := VirtualProtectEx(FProcess.hProcess, Address, 1, PAGE_EXECUTE_READWRITE, @OldProt) and
             WriteProcessMemory(FProcess.hProcess, Address, @Value, 1, x) and
-            VirtualProtectEx(FProcess.hProcess, Address, 1, OldProt, OldProt);
+            VirtualProtectEx(FProcess.hProcess, Address, 1, OldProt, @OldProt);
   FlushInstructionCache(FProcess.hProcess, Address, 1);
 end;
 

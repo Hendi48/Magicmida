@@ -1,6 +1,9 @@
 *.exe
 *.dll
 *.local
+*.lps
 *.identcache
 Win32/
 __history/
+backup/
+lib/

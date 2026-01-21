@@ -2,7 +2,7 @@ unit Themida;
 
 interface
 
-uses Windows, SysUtils, Classes, Utils, TlHelp32, Generics.Collections, DebuggerCore, Dumper, Patcher, Tracer;
+uses Windows, SysUtils, Classes, Utils, Generics.Collections, DebuggerCore, Dumper, Patcher, Tracer;
 
 type
   TEFLRecord = record
@@ -129,7 +129,7 @@ begin
     SetBreakpoint(Cardinal(NtSIT), hwExecute, False);
     KiFastSystemCall := GetProcAddress(GetModuleHandle('ntdll.dll'), 'KiFastSystemCall');
 
-    if not (IsWow64Process(FProcess.hProcess, FWow64) and FWow64) then
+    if not (IsWow64Process(FProcess.hProcess, @FWow64) and FWow64) then
     begin
       SetSoftBP(KiFastSystemCall);
       NtQIP := PCardinal(Cardinal(GetProcAddress(GetModuleHandle('ntdll.dll'), 'ZwQueryInformationProcess')) + 1)^;
@@ -316,7 +316,7 @@ var
 begin
   if FGuardStepping then
   begin
-    VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, FGuardProtection, OldProt);
+    VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, FGuardProtection, @OldProt);
     FGuardStepping := False;
     Exit(DBG_CONTINUE);
   end;
@@ -942,7 +942,7 @@ begin
   FGuardStart := FImageBase + FPESections[0].VirtualAddress;
   FGuardEnd := FImageBase + $100000;
   FGuardProtection := PAGE_NOACCESS;
-  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, FGuardProtection, OldProt);
+  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, FGuardProtection, @OldProt);
 end;
 
 function TTMDebugger.FindDynamicTM(const APattern: AnsiString; AOff: Cardinal): Cardinal;
@@ -987,7 +987,7 @@ begin
   FGuardStart := FImageBase + FPESections[0].VirtualAddress;
   FGuardEnd := FImageBase + FBaseOfData;
   FGuardProtection := Protection;
-  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, FGuardProtection, OldProt);
+  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, FGuardProtection, @OldProt);
 
   if not FThemidaV3 and not IsHWBreakpoint(VirtualProtectAPI) then
     SetBreakpoint(NativeUInt(VirtualProtectAPI));
@@ -1012,7 +1012,7 @@ label
 begin
   //Log(ltInfo, Format('[Guard] %X (%d)', [ExcRecord.ExceptionInformation[1], ExcRecord.ExceptionInformation[0]]));
 
-  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_EXECUTE_READWRITE, OldProt);
+  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_EXECUTE_READWRITE, @OldProt);
 
   if NativeUInt(ExcRecord.ExceptionAddress) > FGuardEnd then
   begin
@@ -1603,7 +1603,7 @@ begin
     end;
   end;
 
-  VirtualProtectEx(FProcess.hProcess, Pointer(IAT), SizeOf(IATData), PAGE_READWRITE, OldProtect);
+  VirtualProtectEx(FProcess.hProcess, Pointer(IAT), SizeOf(IATData), PAGE_READWRITE, @OldProtect);
   if not WriteProcessMemory(FProcess.hProcess, Pointer(IAT), @IATData, SizeOf(IATData), NumWritten) then
     RaiseLastOSError;
 end;

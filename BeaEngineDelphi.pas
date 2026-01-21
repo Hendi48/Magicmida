@@ -367,29 +367,33 @@ implementation
 
 {$IFNDEF USEDLL}
 {$IFNDEF WIN64}
+{$IFNDEF FPC}
 {$L BeaEngineLib.obj}
+{$ELSE}
+{$L BeaEngineLibFPC.obj}
+{$ENDIF}
 uses SysUtils;
 {$ELSE}
 {$L BeaEngineLib64.obj}
-uses AnsiStrings;
+uses {$IFNDEF FPC}AnsiStrings{$ELSE}SysUtils{$ENDIF};
 {$ENDIF}
 
-function {$IFNDEF WIN64}_strcmp{$ELSE}strcmp{$ENDIF}(Str1, Str2: PAnsiChar): Integer; cdecl;
+function {$IFNDEF WIN64}_strcmp{$ELSE}strcmp{$ENDIF}(Str1, Str2: PAnsiChar): Integer; cdecl; {$IFDEF FPC}public name {$IFNDEF WIN64}'_strcmp'{$ELSE}'strcmp'{$ENDIF};{$ENDIF}
 begin
   Result := StrComp(Str1, Str2);
 end;
 
-function {$IFNDEF WIN64}_strcpy{$ELSE}strcpy{$ENDIF}(dest, src: PAnsiChar): PAnsiChar; cdecl;
+function {$IFNDEF WIN64}_strcpy{$ELSE}strcpy{$ENDIF}(dest, src: PAnsiChar): PAnsiChar; cdecl; {$IFDEF FPC}public name {$IFNDEF WIN64}'_strcpy'{$ELSE}'strcpy'{$ENDIF};{$ENDIF}
 begin
   Result := StrCopy(dest, src);
 end;
 
-function _strlen(s: PAnsiChar): Cardinal; cdecl;
+function _strlen(s: PAnsiChar): Cardinal; cdecl;{$IFDEF FPC}public name {$IFNDEF WIN64}'_strlen'{$ELSE}'strlen'{$ENDIF};{$ENDIF}
 begin
   Result := StrLen(s);
 end;
 
-function {$IFNDEF WIN64}_memset{$ELSE}memset{$ENDIF}(Destination: Pointer; C: Integer; Count: NativeUInt): Pointer; cdecl;
+function {$IFNDEF WIN64}_memset{$ELSE}memset{$ENDIF}(Destination: Pointer; C: Integer; Count: NativeUInt): Pointer; cdecl;{$IFDEF FPC}public name {$IFNDEF WIN64}'_memset'{$ELSE}'memset'{$ENDIF};{$ENDIF}
 begin
   FillMemory(Destination, Count, C);
   Result := Destination;
@@ -401,11 +405,20 @@ begin
   Result := Dst;
 end;
 
+{$IFNDEF FPC}
 function {$IFNDEF WIN64}_sprintf{$ELSE}sprintf{$ENDIF}(Buffer, Format: PAnsiChar): Integer; varargs; cdecl; external 'msvcrt.dll' name 'sprintf'; // not using user32_wsprintfA because it fails on %.16llX
+{$ELSE}
+// Stupid hack to make an imported symbol visible...
+function crt_sprintf(Buffer, Format: PAnsiChar): Integer; varargs; cdecl; external 'msvcrt.dll' name 'sprintf';
+procedure sprintf; assembler; nostackframe; public name {$IFNDEF WIN64}'_sprintf'{$ELSE}'sprintf'{$ENDIF};
+asm
+  jmp crt_sprintf
+end;
+{$ENDIF}
 
-function Disasm(var aDisAsm: TDisasm): Integer; stdcall; external;
-function BeaEngineVersion: PAnsiChar; stdcall; external;
-function BeaEngineRevision: PAnsiChar; stdcall; external;
+function Disasm(var aDisAsm: TDisasm): Integer; stdcall; external {$IFDEF FPC}{$IFNDEF WIN64}name '_Disasm@4'{$ENDIF}{$ENDIF};
+function BeaEngineVersion: PAnsiChar; stdcall; external {$IFDEF FPC}{$IFNDEF WIN64}name '_BeaEngineVersion@0'{$ENDIF}{$ENDIF};
+function BeaEngineRevision: PAnsiChar; stdcall; external {$IFDEF FPC}{$IFNDEF WIN64}name '_BeaEngineRevision@0'{$ENDIF}{$ENDIF};
 
 {$ELSE}
 function Disasm(var aDisAsm: TDisasm): Integer; stdcall; external 'BeaEngine.DLL' name '_Disasm@4';

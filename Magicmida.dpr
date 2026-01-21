@@ -1,12 +1,19 @@
 program Magicmida;
 
-{$WEAKLINKRTTI ON}
-{$RTTI EXPLICIT METHODS([]) PROPERTIES([]) FIELDS([])}
+{$IFDEF FPC}
+  {$MODE Delphi}
+{$ELSE}
+  {$WEAKLINKRTTI ON}
+  {$RTTI EXPLICIT METHODS([]) PROPERTIES([]) FIELDS([])}
+{$ENDIF}
 
 uses
+{$IFDEF FPC}
+  LCLIntf, LCLType, Interfaces,
+{$ENDIF}
   Windows,
   TypInfo,
-  Vcl.Forms,
+  Forms,
   Unit2 in 'Unit2.pas' {ThemidaUnpackerWnd},
   {$IFDEF CPUX86}
   Themida in 'Themida.pas',

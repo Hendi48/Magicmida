@@ -2,7 +2,8 @@ unit Dumper;
 
 interface
 
-uses Windows, SysUtils, Classes, Generics.Collections, TlHelp32, PEInfo, Utils;
+uses Windows, SysUtils, Classes, Generics.Collections, {$IFNDEF FPC}TlHelp32{$ELSE}JwaTlHelp32{$ENDIF},
+     PEInfo, Utils;
 
 const
   MAX_IAT_SIZE = $2000; // max 2048 imports

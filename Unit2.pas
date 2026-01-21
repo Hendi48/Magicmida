@@ -4,8 +4,8 @@ interface
 
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics,
-  Controls, Forms, Dialogs, StdCtrls, ComCtrls, ImgList, Utils, System.ImageList,
-  Vcl.Menus, {$IFNDEF CPUX64}Themida, Patcher{$ELSE}Themida64{$ENDIF};
+  Controls, Forms, Dialogs, StdCtrls, ComCtrls, ImgList, Utils, {$IFNDEF FPC}System.ImageList,{$ENDIF}
+  Menus, {$IFNDEF CPUX64}Themida, Patcher{$ELSE}Themida64{$ENDIF};
 
 type
   TThemidaUnpackerWnd = class(TForm)

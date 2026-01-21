@@ -2,7 +2,7 @@ unit Themida64;
 
 interface
 
-uses Windows, SysUtils, Classes, Utils, TlHelp32, Generics.Collections, DebuggerCore, Dumper;
+uses Windows, SysUtils, Classes, Utils, Generics.Collections, DebuggerCore, Dumper;
 
 type
   TTMDebugger64 = class(TDebuggerCore)
@@ -219,7 +219,7 @@ var
 begin
   if FGuardStepping then
   begin
-    if not VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, OldProt) then
+    if not VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, @OldProt) then
       RaiseLastOSError;
     FGuardStepping := False;
     Exit(DBG_CONTINUE);
@@ -380,7 +380,7 @@ var
 begin
   FGuardStart := FImageBase + FPESections[0].VirtualAddress;
   FGuardEnd := FImageBase + FBaseOfData;
-  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, OldProt);
+  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, @OldProt);
 end;
 
 function TTMDebugger64.IsGuardedAddress(Address: NativeUInt): Boolean;
@@ -399,7 +399,7 @@ var
 begin
   Log(ltInfo, Format('[Guard] %s %X', [AccessViolationFlagToStr(ExcRecord.ExceptionInformation[0]), ExcRecord.ExceptionInformation[1]]));
 
-  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_EXECUTE_READWRITE, OldProt);
+  VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_EXECUTE_READWRITE, @OldProt);
 
   if TMSectR.Address = 0 then
     SelectThemidaSection(UIntPtr(ExcRecord.ExceptionAddress));
@@ -428,7 +428,7 @@ begin
     FGuardStart := TMSectR.Address;
     FGuardEnd := FImageBoundary;
     FTMGuard := True;
-    VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, OldProt);
+    VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, @OldProt);
   end
   else if FTraceMSVCOEP then
   begin

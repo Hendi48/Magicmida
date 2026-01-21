@@ -43,6 +43,14 @@ type
     BasePriority: DWORD;
   end;
 
+  {$IFDEF FPC}
+  PImageExportDirectory = PIMAGE_EXPORT_DIRECTORY;
+  PImageImportDescriptor = PIMAGE_IMPORT_DESCRIPTOR;
+  TImageImportDescriptor = IMAGE_IMPORT_DESCRIPTOR;
+  TImageTLSDirectory32 = IMAGE_TLS_DIRECTORY32;
+  TImageTLSDirectory64 = IMAGE_TLS_DIRECTORY64;
+  {$ENDIF}
+
   // Custom structs
   TMemoryRegion = record
     Address: NativeUInt;
