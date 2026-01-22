@@ -280,7 +280,7 @@ begin
   FProcess.hProcess := DebugEv.CreateProcessInfo.hProcess;
 
   NtQueryInformationProcess(FProcess.hProcess, 0, @pbi, SizeOf(pbi), nil);
-  Log(ltInfo, Format('PEB: %.8X', [Cardinal(pbi.PebBaseAddress)]));
+  Log(ltInfo, Format('PEB: %.8X', [UIntPtr(pbi.PebBaseAddress)]));
 
   Buf := 0;
   if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + 2, @Buf, 1, x) then
@@ -396,13 +396,13 @@ var
   lpImageName: Pointer;
   szBuffer: array[0..MAX_PATH] of WideChar;
   x: NativeUInt;
-  DLL: string;
+  DLL: UnicodeString;
 begin
   if (not ReadProcessMemory(FProcess.hProcess, DebugEv.LoadDll.lpImageName, @lpImageName, Sizeof(Pointer), x) or
       not ReadProcessMemory(FProcess.hProcess, lpImageName, @szBuffer, sizeof(szBuffer), x)) then
     DLL := '?'
   else
-    DLL := string(WideString(szBuffer));
+    DLL := UnicodeString(szBuffer);
   Log(ltInfo, Format('[%.8X] Loaded %s', [UIntPtr(DebugEv.LoadDll.lpBaseOfDll), DLL]));
   if Pos('aclayers.dll', LowerCase(DLL)) > 0 then
     raise Exception.Create('[FATAL] Compatibility mode screws up the unpacking process.');

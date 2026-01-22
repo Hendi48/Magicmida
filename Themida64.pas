@@ -1,5 +1,9 @@
 unit Themida64;
 
+{$IFDEF VER3_2}
+  {$ERROR 'FPC 3.2 and older has stack alignment issues in x64 builds.'}
+{$ENDIF}
+
 interface
 
 uses Windows, SysUtils, Classes, Utils, Generics.Collections, DebuggerCore, Dumper;
