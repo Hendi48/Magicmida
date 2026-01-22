@@ -319,6 +319,9 @@ begin
       Buf := 1;
       if WriteProcessMemory(FProcess.hProcess, ProcessParams + OFFSET_LOADER_THREADS, @Buf, 4, x) then
         Log(ltInfo, 'Disabled multi-threaded DLL loading');
+      // 19041+
+      if WriteProcessMemory(FProcess.hProcess, ProcessParams + $43C, @Buf, 4, x) then
+        Log(ltInfo, 'Set tp max');
     end;
   end;
 
