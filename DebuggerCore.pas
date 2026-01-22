@@ -268,12 +268,17 @@ end;
 
 function TDebuggerCore.OnCreateProcessDebugEvent(var DebugEv: TDebugEvent): DWORD;
 const
+  // PEB
   OFFSET_IMAGEBASE = {$IFDEF CPUX86} 8 {$ELSE} 16 {$ENDIF};
+  OFFSET_PARAMS = {$IFDEF CPUX86} $10 {$ELSE} $20 {$ENDIF};
   OFFSET_SHIMDATA = {$IFDEF CPUX86} $1E8 {$ELSE} $2D8 {$ENDIF};
+  // RTL_USER_PROCESS_PARAMETERS
+  OFFSET_LOADER_THREADS = {$IFDEF CPUX64} $2A0 {$ELSE} $40C {$ENDIF};
 var
   pbi: TProcessBasicInformation;
   Buf: Cardinal;
   x: NativeUInt;
+  ProcessParams: PByte;
 begin
   Log(ltInfo, Format('Launch Debug Session (PID: %d, TID: %d)', [DebugEv.dwProcessId, DebugEv.dwThreadId]));
 
@@ -305,6 +310,16 @@ begin
     Buf := 0;
     if WriteProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + OFFSET_SHIMDATA, @Buf, 4, x) then
       Log(ltInfo, 'Cleared PEB.pShimData to prevent apphelp hooks');
+  end;
+
+  if Win32MajorVersion >= 10 then
+  begin
+    if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + OFFSET_PARAMS, @ProcessParams, SizeOf(Pointer), x) then
+    begin
+      Buf := 1;
+      if WriteProcessMemory(FProcess.hProcess, ProcessParams + OFFSET_LOADER_THREADS, @Buf, 4, x) then
+        Log(ltInfo, 'Disabled multi-threaded DLL loading');
+    end;
   end;
 
   FThreads.Add(DebugEv.dwThreadId, DebugEv.CreateProcessInfo.hThread);
