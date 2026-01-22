@@ -5,7 +5,7 @@ interface
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics,
   Controls, Forms, Dialogs, StdCtrls, ComCtrls, ImgList, Utils, {$IFNDEF FPC}System.ImageList,{$ENDIF}
-  Menus, {$IFNDEF CPUX64}Themida, Patcher{$ELSE}Themida64{$ENDIF};
+  Menus, DebuggerCore, {$IFNDEF CPUX64}Themida, Patcher{$ELSE}Themida64{$ENDIF};
 
 type
   TThemidaUnpackerWnd = class(TForm)
@@ -18,13 +18,19 @@ type
     cbDataSections: TCheckBox;
     pmSections: TPopupMenu;
     miCreateSectionsNow: TMenuItem;
+    pmRight: TPopupMenu;
+    miDetach: TMenuItem;
     procedure btnDumpProcessClick(Sender: TObject);
     procedure btnUnpackClick(Sender: TObject);
     procedure btnShrinkClick(Sender: TObject);
     procedure miCreateSectionsNowClick(Sender: TObject);
     procedure FormCreate(Sender: TObject);
+    procedure miDetachClick(Sender: TObject);
   private
+    FDebugger: TDebuggerCore;
+
     procedure Log(MsgType: TLogMsgType; const Msg: string);
+    procedure OnDbgTerminated(Sender: TObject);
   end;
 
 var
@@ -54,7 +60,9 @@ procedure TThemidaUnpackerWnd.btnUnpackClick(Sender: TObject);
 begin
   if OD.Execute then
   begin
-    {$IFDEF CPUX86}TTMDebugger{$ELSE}TTMDebugger64{$ENDIF}.Create(OD.FileName, '', cbDataSections.Checked).FreeOnTerminate := True;
+    FDebugger := {$IFDEF CPUX86}TTMDebugger{$ELSE}TTMDebugger64{$ENDIF}.Create(OD.FileName, '', cbDataSections.Checked);
+    FDebugger.OnTerminate := OnDbgTerminated;
+    FDebugger.FreeOnTerminate := True;
   end;
 end;
 
@@ -83,6 +91,19 @@ begin
       end;
     end;
   {$ENDIF}
+end;
+
+procedure TThemidaUnpackerWnd.miDetachClick(Sender: TObject);
+begin
+  if FDebugger <> nil then
+    FDebugger.Detach
+  else
+    ShowMessage('Debugger not active');
+end;
+
+procedure TThemidaUnpackerWnd.OnDbgTerminated(Sender: TObject);
+begin
+  FDebugger := nil;
 end;
 
 procedure TThemidaUnpackerWnd.btnDumpProcessClick(Sender: TObject);
