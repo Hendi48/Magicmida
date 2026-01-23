@@ -79,6 +79,8 @@ type
     constructor Create(APID: Cardinal; ALog: TLogProc); overload;
     destructor Destroy; override;
 
+    procedure Detach;
+
     property Threads[ThreadID: Cardinal]: THandle read GetThread;
   end;
 
@@ -115,6 +117,19 @@ begin
   FSoftBPs.Free;
 
   inherited;
+end;
+
+procedure TDebuggerCore.Detach;
+var
+  hThread: THandle;
+begin
+  for hThread in FThreads.Values do
+    SuspendThread(hThread);
+
+  if DebugActiveProcessStop(FProcess.dwProcessId) then
+    Log(ltInfo, 'Detached.')
+  else
+    Log(ltFatal, 'Detaching failed.');
 end;
 
 function TDebuggerCore.GetThread(ThreadID: Cardinal): THandle;

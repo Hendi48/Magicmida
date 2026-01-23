@@ -16,7 +16,9 @@ function NtQueryInformationProcess(ProcessHandle: THandle; ProcessInformationCla
   ProcessInformation: Pointer; ProcessInformationLength: DWORD; ReturnLength: PCardinal): Integer; stdcall; external 'ntdll.dll';
 function NtQueryInformationThread(ThreadHandle: THandle; ThreadInformationClass: DWORD;
   ThreadInformation: Pointer; ThreadInformationLength: DWORD; ReturnLength: PCardinal): Integer; stdcall; external 'ntdll.dll';
-//function DebugActiveProcessStop(PID: Cardinal): BOOL; stdcall; external kernel32;
+{$IFDEF FPC}
+function DebugActiveProcessStop(PID: Cardinal): BOOL; stdcall; external kernel32;
+{$ENDIF}
 function OpenThread(dwDesiredAccess: Cardinal; bInheritHandle: BOOL; dwThreadId: Cardinal): THandle; stdcall; external kernel32;
 
 const
