@@ -267,7 +267,7 @@ end;
 
 function TDebuggerCore.OnCreateThreadDebugEvent(var DebugEv: TDebugEvent): DWORD;
 begin
-  Log(ltInfo, Format('[%.4d] Thread started (%p).', [DebugEv.dwThreadId, {$IFDEF FPC}@{$ENDIF}DebugEv.CreateThread.lpStartAddress]));
+  Log(ltInfo, Format('[%.4d] Thread started (%p).', [DebugEv.dwThreadId, {$IFDEF FPC}{$IFNDEF VER3_2}@{$ENDIF}{$ENDIF}DebugEv.CreateThread.lpStartAddress]));
 
   FThreads.Add(DebugEv.dwThreadId, DebugEv.CreateThread.hThread);
   UpdateDR(DebugEv.CreateThread.hThread);
