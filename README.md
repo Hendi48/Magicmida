@@ -44,6 +44,8 @@ To get around this, you need to perform the following steps:
 
 Magicmida can be built with the latest and second-to-latest versions of Delphi Community Edition.
 
+FreePascal/Lazarus is also supported as a build environment, but you'll be dealing with some broken icons in the GUI. x64 builds require a recent-ish FPC git commit.
+
 The BeaEngine object files are built from my [fork](https://github.com/Hendi48/beaengine) of BeaEngine 5.1. There's typically no reason to rebuild them.
 
 ## License
