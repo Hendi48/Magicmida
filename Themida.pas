@@ -137,6 +137,8 @@ begin
 end;
 
 procedure TTMDebugger.OnDebugStart(var hPE: THandle; hThread: THandle);
+var
+  MMPath: string;
 begin
   if Length(ExtractFileName(FExecutable)) >= 50 then // "unpacking a sha256? get rekt!"
     Log(ltInfo, 'WARNING: Long filenames crash some Themida versions (recommend <50)');
@@ -144,10 +146,11 @@ begin
   CloseHandleAPI := GetProcAddress(GetModuleHandle(kernel32), 'CloseHandle');
   SetBreakpoint(Cardinal(CloseHandleAPI), hwExecute, False);
 
-  if FileExists('InjectorCLIx86.exe') then
+  MMPath := ExtractFilePath(ParamStr(0));
+  if FileExists(MMPath + 'InjectorCLIx86.exe') then
   begin
     Log(ltGood, 'Applying ScyllaHide');
-    ShellExecute(0, 'open', 'InjectorCLIx86.exe', PChar(Format('pid:%d %s nowait', [FProcess.dwProcessId, ExtractFilePath(ParamStr(0)) + 'HookLibraryx86.dll'])), nil, SW_HIDE);
+    ShellExecute(0, 'open', PChar(MMPath + 'InjectorCLIx86.exe'), PChar(Format('pid:%d %s nowait', [FProcess.dwProcessId, MMPath + 'HookLibraryx86.dll'])), nil, SW_HIDE);
   end
   else
   begin

@@ -121,11 +121,14 @@ begin
 end;
 
 procedure TTMDebugger64.OnDebugStart(var hPE: THandle; hThread: THandle);
+var
+  MMPath: string;
 begin
-  if FileExists('InjectorCLIx64.exe') then
+  MMPath := ExtractFilePath(ParamStr(0));
+  if FileExists(MMPath + 'InjectorCLIx64.exe') then
   begin
     Log(ltGood, 'Applying ScyllaHide');
-    ShellExecute(0, 'open', 'InjectorCLIx64.exe', PChar(Format('pid:%d %s nowait', [FProcess.dwProcessId, ExtractFilePath(ParamStr(0)) + 'HookLibraryx64.dll'])), nil, SW_HIDE);
+    ShellExecute(0, 'open', PChar(MMPath + 'InjectorCLIx64.exe'), PChar(Format('pid:%d %s nowait', [FProcess.dwProcessId, MMPath + 'HookLibraryx64.dll'])), nil, SW_HIDE);
   end
   else
     raise Exception.Create('ScyllaHide is mandatory for Themida64 (InjectorCLIx64.exe not found)');

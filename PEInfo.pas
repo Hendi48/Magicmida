@@ -49,7 +49,7 @@ type
 
 implementation
 
-uses Utils;
+uses Utils, Math;
 
 { TPEHeader }
 

@@ -482,9 +482,17 @@ begin
     Exit(DebugActiveProcess(FAttachPID));
   end;
 
-  CurrentDir := ExtractFilePath(FExecutable);
-  if AnsiLastChar(CurrentDir) = '\' then
-    Delete(CurrentDir, Length(CurrentDir), 1);
+  // If Magicmida is executed with a different working dir, assume the user wants that one as the working dir for the target.
+  if ExtractFilePath(ParamStr(0)) <> IncludeTrailingPathDelimiter(GetCurrentDir) then
+  begin
+    CurrentDir := GetCurrentDir;
+  end
+  else
+  begin
+    CurrentDir := ExtractFilePath(FExecutable);
+    if AnsiLastChar(CurrentDir) = '\' then
+      Delete(CurrentDir, Length(CurrentDir), 1);
+  end;
 
   FillChar(SI, SizeOf(SI), 0);
   with SI do
