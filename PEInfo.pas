@@ -8,6 +8,8 @@ type
   TPESection = record
     Header: TImageSectionHeader;
     Data: PByte;
+
+    procedure Rename(const NewName: AnsiString);
   end;
   PPESection = ^TPESection;
 
@@ -18,9 +20,6 @@ type
     FSections: TPESections;
     FDumpSize: Cardinal;
     FLFANew: Cardinal;
-
-    procedure FileAlign(var V: Cardinal);
-    procedure SectionAlign(var V: Cardinal);
   public
     NTHeaders: TImageNTHeaders;
 
@@ -37,6 +36,9 @@ type
     procedure Sanitize;
 
     procedure SaveToStream(S: TStream);
+
+    procedure FileAlign(var V: Cardinal);
+    procedure SectionAlign(var V: Cardinal);
 
     property Sections: TPESections read FSections;
 
@@ -236,11 +238,24 @@ function TPEHeader.ConvertOffsetToRVAVector(Offset: NativeUInt): NativeUInt;
 var
   i: Integer;
 begin
-	for i := 0 to High(FSections) do
-		if (FSections[i].Header.PointerToRawData <= Offset) and ((FSections[i].Header.PointerToRawData + FSections[i].Header.SizeOfRawData) > Offset) then
-			Exit((Offset - FSections[i].Header.PointerToRawData) + FSections[i].Header.VirtualAddress);
+  for i := 0 to High(FSections) do
+    if (FSections[i].Header.PointerToRawData <= Offset) and ((FSections[i].Header.PointerToRawData + FSections[i].Header.SizeOfRawData) > Offset) then
+      Exit((Offset - FSections[i].Header.PointerToRawData) + FSections[i].Header.VirtualAddress);
 
   Result := 0;
+end;
+
+{ TPESection }
+
+procedure TPESection.Rename(const NewName: AnsiString);
+var
+  NewLen, MaxLen: Integer;
+begin
+  NewLen := Length(NewName);
+  MaxLen := Length(Header.Name);
+  Move(NewName[1], Header.Name[0], Min(NewLen, MaxLen));
+  if NewLen < MaxLen then
+    FillChar(Header.Name[NewLen], MaxLen - NewLen, 0);
 end;
 
 end.

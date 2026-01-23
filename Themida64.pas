@@ -21,7 +21,7 @@ type
     TMSect: PByte;
     TMSectR: TMemoryRegion;
     Base1, RepEIP: UIntPtr;
-    CloseHandleAPI, AllocMemAPI, FFirstRealAPI: Pointer;
+    CloseHandleAPI, AllocMemAPI, FFirstRealAPI, FCorExeMain: Pointer;
     BaseAccessed: Boolean;
 
     FGuardStart, FGuardEnd: NativeUInt;
@@ -54,6 +54,7 @@ type
   protected
     procedure OnDebugStart(var hPE: THandle; hThread: THandle); override;
     function OnAccessViolation(hThread: THandle; const ExcRec: TExceptionRecord): Cardinal; override;
+    procedure OnDLLLoad(const FileName: UnicodeString; BaseAddress: Pointer); override;
     function OnSinglestep(BPA: NativeUInt): Cardinal; override;
     procedure OnHardwareBreakpoint(hThread: THandle; BPA: NativeUInt; var C: TContext); override;
     function OnSoftwareBreakpoint(hThread: THandle; BPA: Pointer): TSoftBPAction; override;
@@ -138,6 +139,26 @@ begin
     Result := ProcessGuardedAccess(hThread, ExcRec)
   else
     Result := inherited;
+end;
+
+procedure TTMDebugger64.OnDLLLoad(const FileName: UnicodeString; BaseAddress: Pointer);
+var
+  hCorEE: HMODULE;
+begin
+  if Pos('\mscoree.dll', FileName) > 0 then
+  begin
+    Log(ltInfo, 'This might be a .NET program - setting _CorExeMain BP');
+    hCorEE := LoadLibrary('mscoree.dll'); // Load in this process
+    if hCorEE = HMODULE(BaseAddress) then
+    begin
+      FCorExeMain := GetProcAddress(hCorEE, '_CorExeMain');
+      SetSoftBP(FCorExeMain);
+    end
+    else
+      Log(ltFatal, 'DLL was loaded at different base than in target!');
+  end;
+
+  inherited;
 end;
 
 procedure TTMDebugger64.OnHardwareBreakpoint(hThread: THandle; BPA: NativeUInt; var C: TContext);
@@ -234,7 +255,23 @@ end;
 
 function TTMDebugger64.OnSoftwareBreakpoint(hThread: THandle; BPA: Pointer): TSoftBPAction;
 begin
-  raise Exception.Create('SoftBPs are not used by TTMDebugger64');
+  if BPA = FCorExeMain then
+  begin
+    with TDumperDotnet.Create(FProcess, FImageBase) do
+      try
+        DumpToFile(ExtractFilePath(FExecutable) + ChangeFileExt(ExtractFileName(FExecutable), 'U' + ExtractFileExt(FExecutable)));
+      finally
+        Free;
+      end;
+
+    Log(ltGood, '.NET process dumped.');
+
+    FHideThreadEnd := True;
+    TerminateProcess(FProcess.hProcess, 0);
+    Exit(sbpClearContinue); // w/e
+  end;
+
+  raise Exception.CreateFmt('Unexpected SoftBP at %p', [BPA]);
 end;
 
 procedure TTMDebugger64.DumpContext(ThreadID: Cardinal);
@@ -319,7 +356,7 @@ begin
   end;
 
   FImageBoundary := PImageNTHeaders(Buf)^.OptionalHeader.SizeOfImage + FImageBase;
-  Log(ltInfo, Format('Image boundary: %.8X', [FImageBoundary]));
+  Log(ltInfo, Format('Image boundary: %p', [Pointer(FImageBoundary)]));
 
   if string(AnsiString(PAnsiChar(@Sect[0].Name))) = '.text' then
   begin

@@ -82,7 +82,7 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
     TabOrder = 4
   end
   object OD: TOpenDialog
-    Filter = 'Application|*.exe|Nexshit|*.aes'
+    Filter = 'Application|*.exe|Any executable|*.*'
     Options = [ofHideReadOnly, ofFileMustExist, ofEnableSizing]
     Left = 120
     Top = 32

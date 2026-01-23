@@ -67,6 +67,16 @@ type
     property IAT: NativeUInt read FIAT write FIAT; // Virtual address of IAT in target
   end;
 
+  TDumperDotnet = class
+  private
+    FProcess: TProcessInformation;
+    FImageBase: UIntPtr;
+  public
+    constructor Create(const AProcess: TProcessInformation; AImageBase: UIntPtr);
+
+    procedure DumpToFile(const FileName: string);
+  end;
+
 implementation
 
 { TDumper }
@@ -551,6 +561,91 @@ begin
   Result := ReadProcessMemory(FProcess.hProcess, Pointer(Address), Buf, BufSize, BufSize);
   if not Result then
     Log(ltFatal, 'RPM failed');
+end;
+
+{ TDumperDotnet }
+
+constructor TDumperDotnet.Create(const AProcess: TProcessInformation; AImageBase: UIntPtr);
+begin
+  FProcess := AProcess;
+  FImageBase := AImageBase;
+end;
+
+procedure TDumperDotnet.DumpToFile(const FileName: string);
+var
+  FS: TFileStream;
+  Header: array[0..$FFF] of Byte;
+  PE: TPEHeader;
+  Buf, Ptr: PByte;
+  Size, PhysicalSize, ImageSize, Done: DWORD;
+  NumRead: UIntPtr;
+  Mbi: TMemoryBasicInformation;
+begin
+  // Dumping Themida .NET binaries appears to be quite simple because
+  // no special imports processing is required.
+  NumRead := 0;
+  if not ReadProcessMemory(FProcess.hProcess, Pointer(FImageBase), @Header, $1000, NumRead) then
+    raise Exception.Create('DumpToFile header RPM failed');
+
+  PE := TPEHeader.Create(@Header);
+  with PE.Sections[PE.NTHeaders.FileHeader.NumberOfSections - 1] do
+    Size := Header.VirtualAddress + Header.Misc.VirtualSize;
+
+  FS := TFileStream.Create(FileName, fmCreate);
+  GetMem(Buf, Size);
+  try
+    PhysicalSize := Size;
+    PE.FileAlign(PhysicalSize);
+    ImageSize := PhysicalSize;
+    PE.SectionAlign(ImageSize);
+    PE.NTHeaders.OptionalHeader.SizeOfImage := ImageSize;
+    PE.Sections[0].Rename('.text');
+
+    Log(ltInfo, Format('Output has %d sections, determined size to be 0x%X', [PE.NTHeaders.FileHeader.NumberOfSections, Size]));
+
+    Ptr := PByte(FImageBase);
+    Done := 0;
+    Mbi.RegionSize := $1000;
+    while Done < Size do
+    begin
+      if VirtualQueryEx(FProcess.hProcess, Ptr, Mbi, SizeOf(Mbi)) = 0 then
+        raise Exception.CreateFmt('VirtualQueryEx failed at %p', [Ptr]);
+      if Mbi.RegionSize = 0 then
+        raise Exception.CreateFmt('VirtualQueryEx returned a zero region at %p', [Ptr]); // Idk if/why it would do this but we wouldn't make any progress then
+
+      if Mbi.State = MEM_COMMIT then
+      begin
+        NumRead := 0;
+        if not ReadProcessMemory(FProcess.hProcess, Ptr, Buf + Done, Min(Size - Done, Mbi.RegionSize), NumRead) then
+          raise Exception.Create('DumpToFile RPM failed');
+      end
+      else if Mbi.State = MEM_RESERVE then
+      begin
+        // We could mess with the section addresses and leave this chunk out of the physical file, but eh...
+        FillChar((Buf + Done)^, Min(Size - Done, Mbi.RegionSize), 0);
+      end
+      else
+        raise Exception.CreateFmt('Got unexpected region state %X at %p', [Mbi.State, Ptr]);
+
+      Inc(Done, Mbi.RegionSize);
+      Inc(Ptr, Mbi.RegionSize);
+    end;
+
+    FS.Write(Buf^, Size);
+    if Size < PhysicalSize then
+    begin
+      // Pad to file alignment
+      ReallocMem(Buf, PhysicalSize - Size);
+      FillChar(Buf^, PhysicalSize - Size, 0);
+      FS.Write(Buf^, PhysicalSize - Size);
+    end;
+
+    PE.SaveToStream(FS);
+  finally
+    FreeMem(Buf);
+    PE.Free;
+    FS.Free;
+  end;
 end;
 
 { TImportThunk }

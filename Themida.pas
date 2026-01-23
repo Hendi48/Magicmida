@@ -26,6 +26,7 @@ type
     TMSectR: TMemoryRegion;
     Base1, RepEIP, NtQIP: NativeUInt;
     CloseHandleAPI, AllocMemAPI, AllocHeapAPI, KiFastSystemCall, NtSIT, NtQIP64, VirtualProtectAPI: Pointer;
+    FCorExeMain: Pointer;
     CmpImgBase, MagicJump, MagicJumpV1: Pointer;
     BaseAccessed, NewVer, AncientVer: Boolean;
     AllocMemCounter: Integer;
@@ -75,6 +76,7 @@ type
   protected
     procedure OnDebugStart(var hPE: THandle; hThread: THandle); override;
     function OnAccessViolation(hThread: THandle; const ExcRec: TExceptionRecord): Cardinal; override;
+    procedure OnDLLLoad(const FileName: UnicodeString; BaseAddress: Pointer); override;
     function OnSinglestep(BPA: NativeUInt): Cardinal; override;
     procedure OnHardwareBreakpoint(hThread: THandle; BPA: NativeUInt; var C: TContext); override;
     function OnSoftwareBreakpoint(hThread: THandle; BPA: Pointer): TSoftBPAction; override;
@@ -113,8 +115,32 @@ begin
     Result := inherited;
 end;
 
+procedure TTMDebugger.OnDLLLoad(const FileName: UnicodeString;
+  BaseAddress: Pointer);
+var
+  hCorEE: HMODULE;
+begin
+  if Pos('\mscoree.dll', FileName) > 0 then
+  begin
+    Log(ltInfo, 'This might be a .NET program - setting _CorExeMain BP');
+    hCorEE := LoadLibrary('mscoree.dll'); // Load in this process
+    if hCorEE = HMODULE(BaseAddress) then
+    begin
+      FCorExeMain := GetProcAddress(hCorEE, '_CorExeMain');
+      SetSoftBP(FCorExeMain);
+    end
+    else
+      Log(ltFatal, 'DLL was loaded at different base than in target!');
+  end;
+
+  inherited;
+end;
+
 procedure TTMDebugger.OnDebugStart(var hPE: THandle; hThread: THandle);
 begin
+  if Length(ExtractFileName(FExecutable)) >= 50 then // "unpacking a sha256? get rekt!"
+    Log(ltInfo, 'WARNING: Long filenames crash some Themida versions (recommend <50)');
+
   CloseHandleAPI := GetProcAddress(GetModuleHandle(kernel32), 'CloseHandle');
   SetBreakpoint(Cardinal(CloseHandleAPI), hwExecute, False);
 
@@ -364,6 +390,21 @@ begin
     if not SetThreadContext(hThread, C) then
       Log(ltFatal, '[KiFastSystemCall] SetContextThread');
     Exit(sbpKeepContinueNoStep);
+  end
+  else if BPA = FCorExeMain then
+  begin
+    with TDumperDotnet.Create(FProcess, FImageBase) do
+      try
+        DumpToFile(ExtractFilePath(FExecutable) + ChangeFileExt(ExtractFileName(FExecutable), 'U' + ExtractFileExt(FExecutable)));
+      finally
+        Free;
+      end;
+
+    Log(ltGood, '.NET process dumped.');
+
+    FHideThreadEnd := True;
+    TerminateProcess(FProcess.hProcess, 0);
+    Exit(sbpClearContinue); // w/e
   end;
 
   Log(ltInfo, Format('Software breakpoint at %p', [BPA]));

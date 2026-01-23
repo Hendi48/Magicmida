@@ -70,6 +70,7 @@ type
   protected
     procedure OnDebugStart(var hPE: THandle; hThread: THandle); virtual; abstract;
     function OnAccessViolation(hThread: THandle; const ExcRec: TExceptionRecord): Cardinal; virtual;
+    procedure OnDLLLoad(const FileName: UnicodeString; BaseAddress: Pointer); virtual;
     procedure OnHardwareBreakpoint(hThread: THandle; BPA: NativeUInt; var C: TContext); overload; virtual; abstract;
     function OnSoftwareBreakpoint(hThread: THandle; BPA: Pointer): TSoftBPAction; overload; virtual; abstract;
     procedure OnUnsolicitedSoftwareBreakpoint(hThread: THandle; BPA: Pointer); virtual;
@@ -406,6 +407,12 @@ begin
   Result := DBG_CONTINUE;
 end;
 
+procedure TDebuggerCore.OnDLLLoad(const FileName: UnicodeString; BaseAddress: Pointer);
+begin
+  if Pos('aclayers.dll', LowerCase(FileName)) > 0 then
+    raise Exception.Create('[FATAL] Compatibility mode screws up the unpacking process.');
+end;
+
 function TDebuggerCore.OnLoadDllDebugEvent(var DebugEv: TDebugEvent): DWORD;
 var
   lpImageName: Pointer;
@@ -419,8 +426,7 @@ begin
   else
     DLL := UnicodeString(szBuffer);
   Log(ltInfo, Format('[%.8X] Loaded %s', [UIntPtr(DebugEv.LoadDll.lpBaseOfDll), DLL]));
-  if Pos('aclayers.dll', LowerCase(DLL)) > 0 then
-    raise Exception.Create('[FATAL] Compatibility mode screws up the unpacking process.');
+  OnDLLLoad(DLL, DebugEv.LoadDll.lpBaseOfDll);
   Result := DBG_CONTINUE;
   CloseHandle(DebugEv.LoadDll.hFile);
 end;
