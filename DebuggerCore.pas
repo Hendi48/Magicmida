@@ -287,7 +287,7 @@ const
   OFFSET_SHIMDATA = {$IFDEF CPUX86} $1E8 {$ELSE} $2D8 {$ENDIF};
 var
   pbi: TProcessBasicInformation;
-  Buf: Cardinal;
+  Buf: NativeUInt;
   x: NativeUInt;
 begin
   Log(ltInfo, Format('Launch Debug Session (PID: %d, TID: %d)', [DebugEv.dwProcessId, DebugEv.dwThreadId]));
@@ -295,7 +295,7 @@ begin
   FProcess.hProcess := DebugEv.CreateProcessInfo.hProcess;
 
   NtQueryInformationProcess(FProcess.hProcess, 0, @pbi, SizeOf(pbi), nil);
-  Log(ltInfo, Format('PEB: %.8X', [UIntPtr(pbi.PebBaseAddress)]));
+  Log(ltInfo, Format('PEB: %p', [pbi.PebBaseAddress]));
 
   Buf := 0;
   if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + 2, @Buf, 1, x) then
@@ -311,14 +311,14 @@ begin
     Log(ltFatal, 'Reading PEB failed');
 
   if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + OFFSET_IMAGEBASE, @FImageBase, SizeOf(FImageBase), x) then
-  begin
-    Log(ltInfo, 'Process Image Base: ' + IntToHex(FImageBase, 8));
-  end;
+    Log(ltInfo, Format('Process Image Base: %p', [Pointer(FImageBase)]))
+  else
+    raise Exception.Create('Reading process image base failed');
 
-  if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + OFFSET_SHIMDATA, @Buf, 4, x) and (Buf <> 0) then
+  if ReadProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + OFFSET_SHIMDATA, @Buf, SizeOf(Buf), x) and (Buf <> 0) then
   begin
     Buf := 0;
-    if WriteProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + OFFSET_SHIMDATA, @Buf, 4, x) then
+    if WriteProcessMemory(FProcess.hProcess, PByte(pbi.PebBaseAddress) + OFFSET_SHIMDATA, @Buf, SizeOf(Buf), x) then
       Log(ltInfo, 'Cleared PEB.pShimData to prevent apphelp hooks');
   end;
 
