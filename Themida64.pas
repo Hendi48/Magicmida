@@ -556,7 +556,7 @@ begin
   // Process the IAT into an import directory and dump the binary to disk.
   FN := ExtractFilePath(FExecutable) + ChangeFileExt(ExtractFileName(FExecutable), 'U' + ExtractFileExt(FExecutable));
   Dumper.IAT := IAT;
-  Dumper.DumpToFile(FN, Dumper.Process());
+  Dumper.DumpToFile(FN, Dumper.Process(), FIsDLL);
   Dumper.Free;
 
   FHideThreadEnd := True;

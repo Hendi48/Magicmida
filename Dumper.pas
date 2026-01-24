@@ -59,7 +59,7 @@ type
     destructor Destroy; override;
 
     function Process: TPEHeader;
-    procedure DumpToFile(const FileName: string; PE: TPEHeader);
+    procedure DumpToFile(const FileName: string; PE: TPEHeader; IsDLL: Boolean = False);
 
     function DetermineIATSize(IAT: PByte): UInt32;
     function IsAPIAddress(Address: NativeUInt): Boolean;
@@ -210,7 +210,7 @@ begin
   end;
 end;
 
-procedure TDumper.DumpToFile(const FileName: string; PE: TPEHeader);
+procedure TDumper.DumpToFile(const FileName: string; PE: TPEHeader; IsDLL: Boolean = False);
 var
   FS: TFileStream;
   Buf: PByte;
@@ -237,6 +237,11 @@ begin
     end;
     PE.NTHeaders.FileHeader.NumberOfSections := Length(PE.Sections);
     PE.NTHeaders.OptionalHeader.AddressOfEntryPoint := FOEP - FImageBase;
+
+    if IsDLL then
+    begin
+      PE.NTHeaders.FileHeader.Characteristics := PE.NTHeaders.FileHeader.Characteristics or IMAGE_FILE_DLL;
+    end;
 
     if (PE.NTHeaders.OptionalHeader.DllCharacteristics and $40) <> 0 then
     begin

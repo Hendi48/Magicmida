@@ -22,12 +22,16 @@ type
   TDebuggerCore = class abstract(TThread)
   private
     FAttachPID: Cardinal;
+    FDLLExecutable: string;
     FHW1, FHW2, FHW3, FHW4: TBreakpoint;
     FThreads: TDictionary<Cardinal, THandle>;
     FSoftBPs: TDictionary<Pointer, Byte>;
     FSoftBPReenable: NativeUInt;
 
     function PEExecute: Boolean;
+    procedure PEInspect;
+
+    procedure MakeDLLExecutable;
 
     function GetThread(ThreadID: Cardinal): THandle;
 
@@ -48,6 +52,7 @@ type
   protected
     Log: TLogProc;
     FExecutable, FParameters: string;
+    FIsDLL: Boolean;
     FProcess: TProcessInformation;
     FCurrentThreadID: Cardinal;
     FImageBase: NativeUInt;
@@ -144,13 +149,11 @@ var
   Ev: TDebugEvent;
   Status: Cardinal;
 begin
-  if not PEExecute then
-  begin
-    try
+  try
+    if not PEExecute then
       RaiseLastOSError;
-    except
-      Log(ltFatal, 'Creating the process failed: ' + ExceptObject.ToString);
-    end;
+  except
+    Log(ltFatal, 'Creating the process failed: ' + ExceptObject.ToString);
     Exit;
   end;
 
@@ -263,6 +266,12 @@ begin
     //Log(ltInfo, 'Debug session concluded.');
   except
     Log(ltFatal, 'Critical error in debug loop: ' + ExceptObject.ToString);
+  end;
+
+  if FIsDLL then
+  begin
+    Sleep(1000);
+    Windows.DeleteFile(PChar(FDLLExecutable));
   end;
 end;
 
@@ -482,6 +491,8 @@ begin
     Exit(DebugActiveProcess(FAttachPID));
   end;
 
+  PEInspect;
+
   // If Magicmida is executed with a different working dir, assume the user wants that one as the working dir for the target.
   if ExtractFilePath(ParamStr(0)) <> IncludeTrailingPathDelimiter(GetCurrentDir) then
   begin
@@ -503,12 +514,69 @@ begin
   end;
 
   FillChar(PI, SizeOf(PI), 0);
-  CmdLine := Format('"%s" %s', [FExecutable, TrimRight(FParameters)]);
+
+  if FIsDLL then
+  begin
+    MakeDLLExecutable;
+    Log(ltInfo, 'Debugging modified DLL: ' + FDLLExecutable);
+    CmdLine := '"' + FDLLExecutable + '"';
+  end
+  else
+    CmdLine := Format('"%s" %s', [FExecutable, TrimRight(FParameters)]);
 
   Flags := CREATE_DEFAULT_ERROR_MODE or CREATE_NEW_CONSOLE or NORMAL_PRIORITY_CLASS or 1 or 2;
 
   Result := CreateProcess(nil, PChar(CmdLine), nil, nil, False, Flags, nil, PChar(CurrentDir), SI, PI);
   FProcess := PI;
+end;
+
+procedure TDebuggerCore.PEInspect;
+var
+  FS: TFileStream;
+  Header: array[0..$FFF] of Byte;
+  NT: PImageNTHeaders;
+begin
+  FS := TFileStream.Create(FExecutable, fmOpenRead or fmShareDenyNone);
+  try
+    FS.Read(Header, SizeOf(Header));
+  finally
+    FS.Free;
+  end;
+
+  if Cardinal(PImageDosHeader(@Header[0])^._lfanew) > $F00 then
+    raise Exception.Create('Selected file is not a PE or is malformed');
+
+  NT := PImageNTHeaders(PByte(@Header[0]) + PImageDosHeader(@Header[0])^._lfanew);
+  if NT^.Signature <> IMAGE_NT_SIGNATURE then
+    raise Exception.Create('PE file signature mismatch');
+
+  if NT^.FileHeader.Machine <> {$IFDEF CPUX86}IMAGE_FILE_MACHINE_I386{$ELSE}IMAGE_FILE_MACHINE_AMD64{$ENDIF} then
+    raise Exception.Create('File is for the wrong architecture, please use the ' + {$IFDEF CPUX86}'64'{$ELSE}'32'{$ENDIF} + '-bit version of Magicmida.');
+
+  FIsDLL := NT^.FileHeader.Characteristics and IMAGE_FILE_DLL <> 0;
+end;
+
+procedure TDebuggerCore.MakeDLLExecutable;
+var
+  FS: TFileStream;
+  Header: array[0..$FFF] of Byte;
+  NT: PImageNTHeaders;
+begin
+  FDLLExecutable := FExecutable + 'MM.exe';
+  if not CopyFile(PChar(FExecutable), PChar(FDLLExecutable), False) then
+    raise Exception.Create('Copying DLL failed');
+
+  FS := TFileStream.Create(FDLLExecutable, fmOpenReadWrite or fmShareDenyWrite);
+  try
+    FS.Read(Header, SizeOf(Header));
+
+    NT := PImageNTHeaders(PByte(@Header[0]) + PImageDosHeader(@Header[0])^._lfanew);
+    NT.FileHeader.Characteristics := NT.FileHeader.Characteristics and not IMAGE_FILE_DLL;
+    FS.Seek(PImageDosHeader(@Header[0])^._lfanew + 22, soBeginning);
+    FS.Write(NT.FileHeader.Characteristics, SizeOf(NT.FileHeader.Characteristics));
+  finally
+    FS.Free;
+  end;
 end;
 
 procedure TDebuggerCore.FetchMemoryRegions;
