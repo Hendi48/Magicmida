@@ -11,10 +11,7 @@ uses Windows, SysUtils, Classes, Utils, Generics.Collections, DebuggerCore, Them
 type
   TTMDebugger64 = class(TTMCommon)
   private
-    // Themida
-    Base1, RepEIP: UIntPtr;
-    CloseHandleAPI, AllocMemAPI, FFirstRealAPI, FCorExeMain: Pointer;
-    BaseAccessed: Boolean;
+    CloseHandleAPI, VirtualAllocAPI, FCorExeMain: Pointer;
 
     FGuardStart, FGuardEnd: NativeUInt;
     FGuardStepping, FTMGuard, FTraceMSVCOEP: Boolean;
@@ -31,7 +28,6 @@ type
     function FindStaticTM(const APattern: AnsiString; AOff: Cardinal = 0): Cardinal;
     procedure SelectThemidaSection(Address: NativeUInt);
     procedure TMInit(var hPE: THandle);
-    function TMFinderCheck(C: PContext): Boolean;
 
     procedure InstallCodeSectionGuard;
     function IsGuardedAddress(Address: NativeUInt): Boolean;
@@ -64,7 +60,7 @@ uses Math, ShellAPI;
 constructor TTMDebugger64.Create(const AExecutable, AParameters: string; ACreateData: Boolean);
 begin
   FCreateDataSections := ACreateData; // Currently does nothing.
-  FThemidaV3 := True;
+  FThemidaV3 := True; // Themida V2 is not supported on x64 atm.
 
   FGuardAddrs := TList<NativeUInt>.Create;
 
@@ -119,6 +115,8 @@ begin
   else
     raise Exception.Create('ScyllaHide is mandatory for Themida64 (InjectorCLIx64.exe not found)');
 
+  VirtualAllocAPI := GetProcAddress(GetModuleHandle(kernel32), 'VirtualAlloc');
+
   FSleepAPI := NativeUInt(GetProcAddress(GetModuleHandle(kernel32), 'Sleep'));
   FlstrlenAPI := NativeUInt(GetProcAddress(GetModuleHandle(kernel32), 'lstrlen'));
 
@@ -156,7 +154,7 @@ end;
 procedure TTMDebugger64.OnHardwareBreakpoint(hThread: THandle; BPA: NativeUInt; var C: TContext);
 var
   EIP: Pointer;
-  Buf, Buf2: UIntPtr;
+  Buf: UIntPtr;
 begin
   EIP := Pointer(C.Rip);
 
@@ -169,60 +167,29 @@ begin
     if InImageBounds(Buf) then
     begin
       ResetBreakpoint(EIP);
-      SetBreakpoint(FImageBase + $1000, hwAccess);
+      SetBreakpoint(FImageBase + $1000, hwWrite);
     end;
   end
-  else if EIP = AllocMemAPI then
+  else if EIP = VirtualAllocAPI then
   begin
     RPM(C.Rsp, @Buf, 8);
     Log(ltInfo, Format('AllocMem called from %X', [Buf]));
 
     if InImageBounds(Buf) then
     begin
-      ResetBreakpoint(AllocMemAPI);
+      ResetBreakpoint(VirtualAllocAPI);
       InstallCodeSectionGuard;
     end;
   end
-  else if EIP = FFirstRealAPI then
-  begin
-    if RPM(C.Rsp, @Buf, 8) then
-    begin
-      Log(ltGood, 'API called from ' + IntToHex(Buf, 8));
-      if InImageBounds(Buf) then
-      begin
-        if not RPM(C.Rbp + 8, @Buf2, 8) then
-        begin
-          Log(ltFatal, 'Call stack analysis failed');
-          Exit;
-        end;
-        FinishUnpacking(Buf2 - 5 - 4);
-      end;
-    end
-    else
-      WaitForSingleObject(GetCurrentThread, INFINITE);
-  end
   else if BPA = FImageBase + $1000 then
   begin
-    if not BaseAccessed then
-    begin
-      Log(ltGood, Format('Accessed .text base from %X', [UIntPtr(EIP)]));
-      // Next, look for a write
-      ResetBreakpoint(Pointer(FImageBase + $1000));
-      SetBreakpoint(FImageBase + $1000, hwWrite);
-      BaseAccessed := True;
-    end
-    else
-    begin
-      // Write occurred
-      Log(ltGood, Format('Wrote to .text base from %X', [UIntPtr(EIP)]));
-      if TMFinderCheck(@C) then
-      begin
-        ResetBreakpoint(Pointer(FImageBase + $1000));
-        SetBreakpoint(UIntPtr(AllocMemAPI), hwExecute);   // if IAT is protected
-        SetBreakpoint(UIntPtr(FFirstRealAPI), hwExecute); // if IAT is not protected
-        RepEIP := C.Rip;
-      end;
-    end;
+    Log(ltGood, Format('Wrote to .text base from %X', [UIntPtr(EIP)]));
+
+    if TMSectR.Address = 0 then
+      SelectThemidaSection(UIntPtr(EIP));
+
+    ResetBreakpoint(Pointer(FImageBase + $1000));
+    SetBreakpoint(UIntPtr(VirtualAllocAPI), hwExecute);
   end
   else
   begin
@@ -287,20 +254,6 @@ begin
     [C.Rip, C.Rbp, C.Rsp, C.EFlags]));
 end;
 
-function TTMDebugger64.TMFinderCheck(C: PContext): Boolean;
-var
-  Rep: Word;
-  Tmp: NativeUInt;
-begin
-  RPM(C.Rip, @Rep, 2);
-  if Rep = $A4F3 then
-    Exit(True);
-
-  Log(ltInfo, '[TODO] FinderCheck: ' + IntToHex(Rep, 4));
-  Tmp := FImageBase + $1000 + Base1 - 4;
-  Result := (C.Rax = Tmp) or (C.Rbx = Tmp) or (C.Rcx = Tmp) or (C.Rdx = Tmp) or (C.Rsi = Tmp) or (C.Rdi = Tmp);
-end;
-
 {$POINTERMATH ON}
 
 procedure TTMDebugger64.TMInit(var hPE: THandle);
@@ -335,7 +288,6 @@ begin
 
   FBaseOfData := Sect[0].VirtualAddress + PImageNTHeaders(Buf).OptionalHeader.SizeOfCode;
   FMajorLinkerVersion := PImageNTHeaders(Buf).OptionalHeader.MajorLinkerVersion;
-  Base1 := Sect[0].Misc.VirtualSize;
 
   // PE Header Antidump
   if Sect[2].Name[1] = Ord('i') then
@@ -379,12 +331,6 @@ begin
   end;
 
   FreeMem(BufB);
-
-  //AllocMemAPI := GetProcAddress(GetModuleHandle('ntdll.dll'), 'ZwAllocateVirtualMemory');
-  AllocMemAPI := GetProcAddress(GetModuleHandle('kernel32.dll'), 'VirtualAlloc');
-
-  FFirstRealAPI := GetProcAddress(GetModuleHandle('kernel32.dll'), 'GetSystemTimeAsFileTime');
-  //FFirstRealAPI := GetProcAddress(GetModuleHandle('kernel32.dll'), 'GetVersion');
 end;
 
 function TTMDebugger64.FindDynamicTM(const APattern: AnsiString; AOff: Cardinal): Cardinal;
@@ -434,25 +380,25 @@ begin
 
   VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_EXECUTE_READWRITE, @OldProt);
 
-  if TMSectR.Address = 0 then
-    SelectThemidaSection(UIntPtr(ExcRecord.ExceptionAddress));
-
   if FTMGuard then
   begin
     // We've hit the Themida section after executing a TLS entypoint.
     FTMGuard := False;
     InstallCodeSectionGuard;
   end
-  else if NativeUInt(ExcRecord.ExceptionAddress) > FGuardEnd then
+  else if not InImageBounds(UIntPtr(ExcRecord.ExceptionAddress)) then
   begin
-    FGuardAddrs.Add(ExcRecord.ExceptionInformation[1]);
-    // Single-step, then re-protect in OnSinglestep.
+    // Random library code reading our text base...
     FGuardStepping := True;
-    C.ContextFlags := CONTEXT_CONTROL;
-    if not GetThreadContext(hThread, C) then
-      RaiseLastOSError;
-    C.EFlags := C.EFlags or $100;
-    SetThreadContext(hThread, C);
+  end
+  else if UIntPtr(ExcRecord.ExceptionAddress) > FGuardEnd then
+  begin
+    // Themida access
+    if TMSectR.Address = 0 then
+      SelectThemidaSection(UIntPtr(ExcRecord.ExceptionAddress));
+
+    FGuardAddrs.Add(ExcRecord.ExceptionInformation[1]);
+    FGuardStepping := True;
   end
   else if (ExcRecord.ExceptionInformation[0] = 8) and (FTLSTotal > 0) and (FTLSCounter < FTLSTotal) then
   begin
@@ -471,7 +417,7 @@ begin
   end
   else
   begin
-    OEP := NativeUInt(ExcRecord.ExceptionAddress);
+    OEP := UIntPtr(ExcRecord.ExceptionAddress);
 
     // Check if virtualized (but goes to .text first for jmp).
     CheckVirtualizedOEP(OEP);
@@ -507,6 +453,16 @@ begin
       Log(ltFatal, 'GetThreadContext failed for further OEP check');
 
     FinishUnpacking(OEP);
+  end;
+
+  if FGuardStepping then
+  begin
+    // Single-step, then re-protect in OnSinglestep.
+    C.ContextFlags := CONTEXT_CONTROL;
+    if not GetThreadContext(hThread, C) then
+      RaiseLastOSError;
+    C.EFlags := C.EFlags or $100;
+    SetThreadContext(hThread, C);
   end;
 
   Result := DBG_CONTINUE;
@@ -595,7 +551,7 @@ begin
   IAT := DetermineIATAddress(OEP, Dumper);
   Log(ltGood, 'IAT: ' + IntToHex(IAT, 8));
 
-  TraceImports(IAT);
+  TraceImports(IAT, Dumper);
 
   // Process the IAT into an import directory and dump the binary to disk.
   FN := ExtractFilePath(FExecutable) + ChangeFileExt(ExtractFileName(FExecutable), 'U' + ExtractFileExt(FExecutable));

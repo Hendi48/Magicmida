@@ -1141,7 +1141,7 @@ begin
     // code that does these computations and stores the address is virtualized. There is no runtime
     // decision not to do this like there was before (with kernel32/advapi32/user32 bases), so we
     // can't patch it out.
-    TraceImports(IAT);
+    TraceImports(IAT, Dumper);
   end;
 
   // Old Themida versions like turning API calls into relative calls/jumps - restore them to absolute references to the IAT

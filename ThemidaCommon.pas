@@ -29,7 +29,7 @@ type
     procedure CheckVirtualizedOEP(OEP: NativeUInt);
 
     function DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
-    procedure TraceImports(IAT: NativeUInt);
+    procedure TraceImports(IAT: NativeUInt; Dumper: TDumper);
 
     function TraceIsAtAPI(Tracer: TTracer; var C: TContext): Boolean; virtual; abstract;
   end;
@@ -167,7 +167,7 @@ var
 
 var
   IATRef, Seeker, Target: NativeUInt;
-  IATData: array[0..2047] of NativeUInt;
+  IATData: array[0..(MAX_IAT_SIZE div SizeOf(Pointer)) - 1] of NativeUInt;
   Site: array[0..5] of Byte;
   i, Consecutive0: Integer;
 begin
@@ -201,7 +201,6 @@ begin
     if IATRef = 0 then
     begin
       Log(ltInfo, 'No IAT reference found via reference search');
-      Sleep(600000);
       if FGuardAddrs.Count > 0 then
       begin
         RPM(FGuardAddrs[0], @Site, 6);
@@ -259,10 +258,10 @@ begin
     raise Exception.Create('IAT assertion failed');
 end;
 
-procedure TTMCommon.TraceImports(IAT: NativeUInt);
+procedure TTMCommon.TraceImports(IAT: NativeUInt; Dumper: TDumper);
 var
-  IATData: array[0..(MAX_IAT_SIZE div 4) - 1] of NativeUInt;
-  i, OldProtect: Cardinal;
+  IATData: array[0..(MAX_IAT_SIZE div SizeOf(Pointer)) - 1] of NativeUInt;
+  i, OldProtect, TrashCounter: Cardinal;
   NumWritten: NativeUInt;
   DidSetExitProcess: Boolean;
   Ctx: TContext;
@@ -270,11 +269,14 @@ begin
   RPM(IAT, @IATData, SizeOf(IATData));
 
   DidSetExitProcess := False;
+  TrashCounter := 0;
   for i := 0 to High(IATData) do
   begin
     if TMSectR.Contains(IATData[i]) then
     begin
       Log(ltInfo, Format('Trace: %.8X [%.8X]', [IATData[i], IAT + i * SizeOf(Pointer)]));
+
+      TrashCounter := 0;
 
       Ctx.ContextFlags := CONTEXT_CONTROL;
       GetThreadContext(Threads[FCurrentThreadID], Ctx);
@@ -316,7 +318,15 @@ begin
         finally
           Free;
         end;
-    end;
+    end
+    else if (IATData[i] = 0) or not Dumper.IsAPIAddress(IATData[i]) then
+    begin
+      Inc(TrashCounter);
+      if TrashCounter > 64 then
+        Break;
+    end
+    else
+      TrashCounter := 0;
   end;
 
   VirtualProtectEx(FProcess.hProcess, Pointer(IAT), SizeOf(IATData), PAGE_READWRITE, @OldProtect);

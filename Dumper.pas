@@ -6,7 +6,7 @@ uses Windows, SysUtils, Classes, Generics.Collections, {$IFNDEF FPC}TlHelp32{$EL
      PEInfo, Utils, Math;
 
 const
-  MAX_IAT_SIZE = $2000; // max 2048 imports
+  MAX_IAT_SIZE = 5120 * SizeOf(Pointer); // max 5K imports
 
 type
   TExportTable = TDictionary<Pointer, string>;
