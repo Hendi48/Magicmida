@@ -28,7 +28,8 @@ uses
   BeaEngineDelphi in 'BeaEngineDelphi.pas',
   Tracer in 'Tracer.pas',
   AntiDumpFix in 'AntiDumpFix.pas',
-  DebuggerCore in 'DebuggerCore.pas';
+  DebuggerCore in 'DebuggerCore.pas',
+  ThemidaCommon in 'ThemidaCommon.pas';
 
 {$R *.res}
 

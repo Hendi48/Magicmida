@@ -6,27 +6,18 @@ unit Themida64;
 
 interface
 
-uses Windows, SysUtils, Classes, Utils, Generics.Collections, DebuggerCore, Dumper;
+uses Windows, SysUtils, Classes, Utils, Generics.Collections, DebuggerCore, ThemidaCommon, Tracer, Dumper;
 
 type
-  TTMDebugger64 = class(TDebuggerCore)
+  TTMDebugger64 = class(TTMCommon)
   private
-    FBaseOfData: UIntPtr;
-    FImageBoundary: UIntPtr;
-    FPESections: array of TImageSectionHeader;
-    FMajorLinkerVersion: Byte;
-    FCreateDataSections: Boolean;
-
     // Themida
-    TMSect: PByte;
-    TMSectR: TMemoryRegion;
     Base1, RepEIP: UIntPtr;
     CloseHandleAPI, AllocMemAPI, FFirstRealAPI, FCorExeMain: Pointer;
     BaseAccessed: Boolean;
 
     FGuardStart, FGuardEnd: NativeUInt;
     FGuardStepping, FTMGuard, FTraceMSVCOEP: Boolean;
-    FGuardAddrs: TList<NativeUInt>;
 
     FMSVCInitCookie, FMSVCOEP: NativeUInt;
 
@@ -46,11 +37,12 @@ type
     function IsGuardedAddress(Address: NativeUInt): Boolean;
     function ProcessGuardedAccess(hThread: THandle; const ExcRecord: TExceptionRecord): Cardinal;
 
-    function DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
     procedure FinishUnpacking(OEP: NativeUInt);
 
     function TryFindCorrectOEP(HitAddress: NativeUInt): NativeUInt;
     procedure WriteMSVCOEP(CRTStartup: UIntPtr);
+  protected
+    function TraceIsAtAPI(Tracer: TTracer; var C: TContext): Boolean; override;
   protected
     procedure OnDebugStart(var hPE: THandle; hThread: THandle); override;
     function OnAccessViolation(hThread: THandle; const ExcRec: TExceptionRecord): Cardinal; override;
@@ -65,20 +57,14 @@ type
 
 implementation
 
-uses BeaEngineDelphi, Math, ShellAPI;
-
-function DisasmCheck(var Dis: TDisasm): Integer;
-begin
-  Result := Disasm(Dis);
-  if (Result = UNKNOWN_OPCODE) or (Result = OUT_OF_BLOCK) then
-    raise Exception.CreateFmt('Disasm result: %d (EIP = %X)', [Result, Dis.EIP]);
-end;
+uses Math, ShellAPI;
 
 { TDebugger }
 
 constructor TTMDebugger64.Create(const AExecutable, AParameters: string; ACreateData: Boolean);
 begin
   FCreateDataSections := ACreateData; // Currently does nothing.
+  FThemidaV3 := True;
 
   FGuardAddrs := TList<NativeUInt>.Create;
 
@@ -132,6 +118,9 @@ begin
   end
   else
     raise Exception.Create('ScyllaHide is mandatory for Themida64 (InjectorCLIx64.exe not found)');
+
+  FSleepAPI := NativeUInt(GetProcAddress(GetModuleHandle(kernel32), 'Sleep'));
+  FlstrlenAPI := NativeUInt(GetProcAddress(GetModuleHandle(kernel32), 'lstrlen'));
 
   TMInit(hPE);
 end;
@@ -484,6 +473,9 @@ begin
   begin
     OEP := NativeUInt(ExcRecord.ExceptionAddress);
 
+    // Check if virtualized (but goes to .text first for jmp).
+    CheckVirtualizedOEP(OEP);
+
     // Check if virtualized and stolen (goes straight into VM without using jmp in .text).
     C.ContextFlags := CONTEXT_CONTROL;
     if GetThreadContext(hThread, C) then
@@ -603,6 +595,8 @@ begin
   IAT := DetermineIATAddress(OEP, Dumper);
   Log(ltGood, 'IAT: ' + IntToHex(IAT, 8));
 
+  TraceImports(IAT);
+
   // Process the IAT into an import directory and dump the binary to disk.
   FN := ExtractFilePath(FExecutable) + ChangeFileExt(ExtractFileName(FExecutable), 'U' + ExtractFileExt(FExecutable));
   Dumper.IAT := IAT;
@@ -615,114 +609,41 @@ begin
   Log(ltGood, 'Operation completed successfully.');
 end;
 
-function TTMDebugger64.DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
+function TTMDebugger64.TraceIsAtAPI(Tracer: TTracer; var C: TContext): Boolean;
 var
-  TextBase, CodeSize: NativeUInt;
-  CodeDump: PByte;
-  NumInstr: Cardinal;
-
-  function FindCallOrJmpPtr(Address: NativeUInt; IgnoreMethodBoundary: Boolean = False): NativeUInt;
-  var
-    Dis: TDisasm;
-    Len: Integer;
-  begin
-    Result := 0;
-    FillChar(Dis, SizeOf(Dis), 0);
-    Dis.EIP := NativeUInt(CodeDump) + Address - TextBase;
-    Dis.VirtualAddr := Address;
-    while NumInstr < 5000 do
-    begin
-      Len := DisasmCheck(Dis);
-
-      if (PWord(Dis.EIP)^ = $15FF) or (PWord(Dis.EIP)^ = $25FF) then // call dword ptr/jmp dword ptr
-      begin
-        Log(ltInfo, 'Found ' + IntToHex(Dis.VirtualAddr, 8) + ' : ' + string(AnsiString(Dis.CompleteInstr)));
-        Exit(Dis.VirtualAddr + NativeUInt(Dis.Operand1.Memory.Displacement) + 6);
-      end;
-
-      if (PByte(Dis.EIP)^ = $E8) and not IgnoreMethodBoundary then // call
-      begin
-        if Dis.Instruction.AddrValue > TextBase + CodeSize then
-          Exit(0);
-
-        Result := FindCallOrJmpPtr(Dis.Instruction.AddrValue);
-        if Result <> 0 then
-          Exit;
-      end;
-
-      if ((PByte(Dis.EIP)^ = $C3) or (PByte(Dis.EIP)^ = $C2)) and not IgnoreMethodBoundary then // ret
-        Exit(0);
-
-      Inc(NumInstr);
-      Inc(Dis.EIP, Len);
-      Inc(Dis.VirtualAddr, Len);
-    end;
-  end;
-
-var
-  IATRef, Seeker, CurAddress, x: NativeUInt;
-  IATData: array[0..(MAX_IAT_SIZE div SizeOf(Pointer))-1] of NativeUInt;
-  i: Cardinal;
-  WroteExitProcess: Boolean;
+  InsnData: Cardinal;
+  ReturnAddr: NativeUInt;
 begin
-  // For MSVC, the IAT often resides at FImageBase + FBaseOfData
-  // Other compilers such as Delphi use a dedicated .idata section, but the IAT doesn't start directly at the beginning, so some guesswork is needed
-
-  TextBase := FImageBase + FPESections[0].VirtualAddress;
-  CodeSize := FBaseOfData - FPESections[0].VirtualAddress;
-  Log(ltInfo, Format('Text base: %.8X, code size: %X', [TextBase, CodeSize]));
-  NumInstr := 0;
-  GetMem(CodeDump, CodeSize);
-  try
-    if not RPM(TextBase, CodeDump, CodeSize) then
-      raise Exception.Create('DetermineIATAddress: RPM failed');
-
-    // TODO if not FIsVMOEP then
-    //  IATRef := FindCallOrJmpPtr(OEP)
-    //else
-      IATRef := FindCallOrJmpPtr(TextBase, True);
-
-    if IATRef = 0 then
-      raise Exception.Create('Unable to obtain IAT reference');
-
-    Log(ltInfo, 'First IAT ref: ' + IntToHex(IATRef, 8));
-  finally
-    FreeMem(CodeDump);
-  end;
-
-  // The IATRef we obtained points somewhere into the IAT area. Now we need to figure out the start of the table.
-  Seeker := IATRef - $1000;
-  RPM(Seeker, @IATData, SizeOf(IATData));
-  for i := 0 to High(IATData) do
+  if (Tracer.Counter > 100) and (Tracer.Counter < 5000) then
   begin
-    if not Dumper.IsAPIAddress(IATData[i]) then
-      Inc(Seeker, SizeOf(NativeUInt))
-    else
-      Break; // Let's hope we didn't randomly stumble upon a valid API address somewhere before the IAT.
-  end;
-
-  // ExitProcess is often redirected to Themida VM in new versions.
-  WroteExitProcess := False;
-  RPM(Seeker, @IATData, SizeOf(IATData));
-  for i := 0 to (Dumper.DetermineIATSize(@IATData[0]) div SizeOf(Pointer)) - 1 do
-  begin
-    if TMSectR.Contains(IATData[i]) then
+    RPM(C.Rip, @InsnData, 4);
+    if InsnData = $0CB10FF0 then // First 4 bytes of "lock cmpxchg [rbx+rbp], ecx"
     begin
-      CurAddress := Seeker + i * SizeOf(UIntPtr);
-      if WroteExitProcess then
-      begin
-        Log(ltFatal, Format('Encountered another Themida IAT pointer at %X', [CurAddress]));
-        Continue;
-      end;
-      Log(ltInfo, Format('Replacing redirect [IAT]%X->[VM]%X with ExitProcess', [CurAddress, IATData[i]]));
-      IATData[i] := UIntPtr(GetProcAddress(GetModuleHandle(kernel32), 'ExitProcess'));
-      VirtualProtectEx(FProcess.hProcess, Pointer(CurAddress), SizeOf(UIntPtr), PAGE_READWRITE, @x);
-      WriteProcessMemory(FProcess.hProcess, Pointer(CurAddress), @IATData[i], SizeOf(UIntPtr), x);
-      WroteExitProcess := True;
+      FTraceInVM := True;
+      Log(ltInfo, 'Trace ran into Themida VM, stopping');
+      Exit(True); // Stop
     end;
   end;
 
-  Result := Seeker;
+  // cat & mouse game with fake calls
+  if (C.Rsp < FTraceStartSP) and ((C.Rip = FSleepAPI) or (C.Rip = FlstrlenAPI)) then
+  begin
+    // It'd be better to just execute them, but the tracer currently faults at far jumps for wow64 syscalls.
+    Log(ltInfo, Format('Skipping anti-trace API at %p', [Pointer(C.Rip)]));
+    RPM(C.Rsp, @ReturnAddr, SizeOf(ReturnAddr));
+    Inc(C.Rsp, SizeOf(ReturnAddr));
+    C.Rip := ReturnAddr;
+  end;
+
+  Result := not TMSectR.Contains(C.Rip);
+  if Result and (C.Rsp < FTraceStartSP) then
+  begin
+    Log(ltInfo, Format('Warning: Might have encountered new fake API at %.8x', [C.Rip]));
+    Result := False;
+  end;
+
+  if Result then
+    FTracedAPI := C.Rip;
 end;
 
 end.
