@@ -45,7 +45,7 @@ type
     FIATImage: PByte;
     FIATImageSize: Cardinal;
 
-    FUsrPath: PChar;
+    FUsrPath: string;
     FHUsr: HMODULE;
 
     procedure CollectNTFwd; overload;
@@ -89,9 +89,9 @@ begin
 
   if Win32MajorVersion > 5 then
   begin
-    FUsrPath := PChar(ExtractFilePath(ParamStr(0)) + 'mmusr32.dll');
-    CopyFile('C:\Windows\system32\user32.dll', FUsrPath, False);
-    FHUsr := LoadLibraryEx(FUsrPath, 0, $20) - 2;
+    FUsrPath := ExtractFilePath(ParamStr(0)) + 'mmusr32.dll';
+    CopyFile('C:\Windows\system32\user32.dll', PChar(FUsrPath), False);
+    FHUsr := LoadLibraryEx(PChar(FUsrPath), 0, $20) - 2;
   end;
 
   FForwards := TForwardDict.Create(32);
@@ -132,7 +132,7 @@ begin
   if FHUsr <> 0 then
   begin
     FreeLibrary(FHUsr + 2);
-    Windows.DeleteFile(FUsrPath);
+    Windows.DeleteFile(PChar(FUsrPath));
   end;
 
   inherited;
