@@ -2,15 +2,15 @@
 
 Magicmida is a Themida auto unpacker for 32-bit and 64-bit applications.
 
-Support for 64-bit is not very fleshed out yet and may only work when weaker protection options were used.
-
 Functions:
 * Unpack: Unpacks the binary you select. The unpacked binary will be saved with an `U` suffix.
 * Auto create data sections: Restores .rdata/.data sections. Only works on specific targets. This is a must for MSVC applications using Thread Local Storage because they don't work properly otherwise.
 * Dump process: Allows you to enter the PID of a running process whose .text section will be dumped (overwritten) into an already unpacked file. This is useful after using Oreans Unvirtualizer in OllyDbg. Only works properly if data sections were created.
 * Shrink: Deletes all sections that are no longer needed (if you unvirtualized or if your binary does not use virtualization). Warning: This will break your binary for non-MSVC compilers.
 
-Note: The tool focuses on cleanness of the resulting binaries. Things such as VM anti-dump are explicitly *not* fixed. If your target has a virtualized entrypoint, the resulting dump will be broken and won't run (except for MSVC6, which has special fixup code to restore the OEP).
+Notes about running unpacked binaries:
+* **VM anti-dumps are explicitly not fixed.** If your target has a virtualized entrypoint or any other virtualized code, the resulting dump will be broken and won't run (or it will only run on your system until you reboot, because many anti-dumps use DLL base addresses). Fixing this is possible with special tool assistance, but tedious.
+* Unpacked DLLs will miss relocation information, which can make them problematic to use in bigger applications that load a lot of libraries.
 
 Important: Never activate any compatibility mode options for Magicmida or for the target you're unpacking. It would very likely screw up the unpacking process due to shimming.
 
@@ -20,7 +20,7 @@ Old targets from 2007-2009 often don't unpack properly on modern Windows version
 
 ## Anti-anti-debugging
 
-Newer versions of Themida detect hardware breakpoints. In order to deal with this, injecting ScyllaHide is supported. A suitable profile is shipped with Magicmida. You just need to download SycllaHide and put `HookLibraryx86.dll` and `InjectorCLIx86.exe` next to `Magicmida.exe`. Do not overwrite scylla_hide.ini unless you know what you're doing.
+Newer versions of Themida detect hardware breakpoints. In order to deal with this, injecting [ScyllaHide](https://github.com/x64dbg/ScyllaHide/releases) is supported. A suitable profile is shipped with Magicmida. You just need to download SycllaHide and put `HookLibraryx86.dll` and `InjectorCLIx86.exe` next to `Magicmida.exe`. Do not overwrite scylla_hide.ini unless you know what you're doing.
 
 ## Command line usage
 
