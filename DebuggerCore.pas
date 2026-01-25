@@ -92,7 +92,9 @@ type
 
 implementation
 
-{ TDebugger }
+uses PEInfo;
+
+{ TDebuggerCore }
 
 constructor TDebuggerCore.Create(const AExecutable, AParameters: string; ALog: TLogProc);
 begin
@@ -557,10 +559,25 @@ begin
 end;
 
 procedure TDebuggerCore.MakeDLLExecutable;
+const
+  // These stubs set up the stack/parameters to stage a call to the DLL entrypoint.
+  // Older Themida versions didn't strictly require it, newer ones crash without it.
+{$IFDEF CPUX86}
+  STUB: array[0..12] of Byte = ($8B, $40, $08, $6A, $00, $6A, $01, $50, $E8, $00, $00, $00, $00);
+{$ELSE}
+  STUB: array[0..29] of Byte = ($48, $83, $EC, $28, $65, $48, $8B, $04, $25, $60, $00, $00, $00, $48, $8B, $48, $10,
+    $BA, $01, $00, $00, $00, $45, $31, $C0, $E8, $00, $00, $00, $00);
+{$ENDIF}
 var
   FS: TFileStream;
   Header: array[0..$FFF] of Byte;
   NT: PImageNTHeaders;
+  PE: TPEHeader;
+  EPSection: PPESection;
+  CurData: array[0..High(STUB)] of Byte;
+  i: Integer;
+  NewEP: Cardinal;
+  PosOptionalHeader: UInt64;
 begin
   FDLLExecutable := FExecutable + 'MM.exe';
   if not CopyFile(PChar(FExecutable), PChar(FDLLExecutable), False) then
@@ -574,6 +591,43 @@ begin
     NT.FileHeader.Characteristics := NT.FileHeader.Characteristics and not IMAGE_FILE_DLL;
     FS.Seek(PImageDosHeader(@Header[0])^._lfanew + 22, soBeginning);
     FS.Write(NT.FileHeader.Characteristics, SizeOf(NT.FileHeader.Characteristics));
+
+    PosOptionalHeader := FS.Position;
+
+    if NT.OptionalHeader.DllCharacteristics and $80 <> 0 then
+    begin
+      // Disable "Code Integrity Image"
+      NT.OptionalHeader.DllCharacteristics := NT.OptionalHeader.DllCharacteristics and not $80;
+      FS.Seek(Cardinal(@TImageOptionalHeader(nil^).DllCharacteristics), soCurrent); // after last Write, we're at the beginning of OptionalHeader
+      FS.Write(NT.OptionalHeader.DllCharacteristics, SizeOf(NT.OptionalHeader.DllCharacteristics));
+    end;
+
+    // It'd probably be smarter to do this in memory after launch, but meh...
+    PE := TPEHeader.Create(@Header[0]);
+    try
+      EPSection := PE.GetSectionByVA(NT.OptionalHeader.AddressOfEntryPoint);
+      FS.Seek(EPSection.Header.PointerToRawData + EPSection.Header.SizeOfRawData - SizeOf(STUB), soBeginning);
+      FS.Read(CurData, SizeOf(CurData));
+      for i := 0 to High(CurData) do
+        if CurData[i] <> 0 then
+        begin
+          Log(ltFatal, 'Not enough room in EP section');
+          Exit;
+        end;
+
+      Move(STUB, CurData, SizeOf(CurData));
+      NewEP := EPSection.Header.VirtualAddress + EPSection.Header.SizeOfRawData - SizeOf(STUB);
+      PInteger(@CurData[Length(CurData) - 4])^ := NT.OptionalHeader.AddressOfEntryPoint - (NewEP + SizeOf(STUB));
+
+      FS.Seek(-SizeOf(CurData), soCurrent);
+      FS.Write(CurData, SizeOf(CurData));
+
+      NT.OptionalHeader.AddressOfEntryPoint := NewEP;
+      FS.Seek(PosOptionalHeader + Cardinal(@TImageOptionalHeader(nil^).AddressOfEntryPoint), soBeginning);
+      FS.Write(NT.OptionalHeader.AddressOfEntryPoint, SizeOf(NT.OptionalHeader.AddressOfEntryPoint));
+    finally
+      PE.Free;
+    end;
   finally
     FS.Free;
   end;
