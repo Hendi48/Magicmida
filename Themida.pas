@@ -622,16 +622,13 @@ begin
   Inc(Buf, PImageDosHeader(Buf)^._lfanew);
   Pointer(Sect) := Buf + SizeOf(TImageNTHeaders);
 
-  SetLength(FPESections, PImageNTHeaders(Buf).FileHeader.NumberOfSections);
-  for x := 0 to High(FPESections) do
-    FPESections[x] := Sect[x];
+  InitPEDetails(PImageNTHeaders(Buf));
 
   if (FPESections[High(FPESections)].Misc.VirtualSize = $1000) and (FPESections[High(FPESections)].SizeOfRawData = $1000)
      and (FPESections[High(FPESections) - 1].Misc.VirtualSize = $1000) then
     FThemidaV2BySections := True;
 
   FBaseOfData := PImageNTHeaders(Buf).OptionalHeader.BaseOfData;
-  FMajorLinkerVersion := PImageNTHeaders(Buf).OptionalHeader.MajorLinkerVersion;
 
   FCompressed := FPESections[0].Misc.VirtualSize <> FPESections[0].SizeOfRawData;
 
@@ -643,9 +640,6 @@ begin
   x := Ord('p');
   if not WriteProcessMemory(FProcess.hProcess, Test, @x, 1, w) then
     raise Exception.CreateFmt('Fixing PE header antidump failed! Code: %d', [GetLastError]);
-
-  FImageBoundary := PImageNTHeaders(Buf)^.OptionalHeader.SizeOfImage + FImageBase;
-  Log(ltInfo, Format('Image boundary: %.8X', [FImageBoundary]));
 
   if PImageNTHeaders(Buf).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size > 0 then
   begin

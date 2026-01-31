@@ -302,7 +302,8 @@ var
   Buf: NativeUInt;
   x: NativeUInt;
 begin
-  Log(ltInfo, Format('Launch Debug Session (PID: %d, TID: %d)', [DebugEv.dwProcessId, DebugEv.dwThreadId]));
+  Log(ltInfo, Format('Running on Windows build %d', [GetWindowsBuildNumber]));
+  Log(ltInfo, Format('Debug session launched (PID: %d, TID: %d)', [DebugEv.dwProcessId, DebugEv.dwThreadId]));
 
   FProcess.hProcess := DebugEv.CreateProcessInfo.hProcess;
 

@@ -53,7 +53,7 @@ type
 
 implementation
 
-uses Math, ShellAPI;
+uses Math, ShellAPI, DateUtils;
 
 { TDebugger }
 
@@ -105,11 +105,15 @@ end;
 procedure TTMDebugger64.OnDebugStart(var hPE: THandle; hThread: THandle);
 var
   MMPath: string;
+  TS: Cardinal;
 begin
   MMPath := ExtractFilePath(ParamStr(0));
   if FileExists(MMPath + 'InjectorCLIx64.exe') then
   begin
-    Log(ltGood, 'Applying ScyllaHide');
+    TS := GetPETimestamp(MMPath + 'InjectorCLIx64.exe');
+    if TS < $6484FEF9 then
+      raise Exception.Create('Your version of InjectorCLIx64 is unsuitable due to a bug. Please use the provided binary or build the latest git master.');
+    Log(ltGood, Format('Applying ScyllaHide (built %s)', [DateToStr(UnixToDateTime(TS))]));
     ShellExecute(0, 'open', PChar(MMPath + 'InjectorCLIx64.exe'), PChar(Format('pid:%d %s nowait', [FProcess.dwProcessId, MMPath + 'HookLibraryx64.dll'])), nil, SW_HIDE);
   end
   else
@@ -260,6 +264,7 @@ procedure TTMDebugger64.TMInit(var hPE: THandle);
 var
   Buf, BufB, Test: PByte;
   x: Cardinal;
+  NT: PImageNTHeaders;
   Sect: PImageSectionHeader;
   w: NativeUInt;
   TLSDir: TImageTLSDirectory64;
@@ -280,14 +285,12 @@ begin
   BufB := Buf;
 
   Inc(Buf, PImageDosHeader(Buf)^._lfanew);
+  NT := PImageNTHeaders(Buf);
   Pointer(Sect) := Buf + SizeOf(TImageNTHeaders);
 
-  SetLength(FPESections, PImageNTHeaders(Buf).FileHeader.NumberOfSections);
-  for x := 0 to High(FPESections) do
-    FPESections[x] := Sect[x];
+  InitPEDetails(NT);
 
-  FBaseOfData := Sect[0].VirtualAddress + PImageNTHeaders(Buf).OptionalHeader.SizeOfCode;
-  FMajorLinkerVersion := PImageNTHeaders(Buf).OptionalHeader.MajorLinkerVersion;
+  FBaseOfData := Sect[0].VirtualAddress + NT^.OptionalHeader.SizeOfCode;
 
   // PE Header Antidump
   if Sect[2].Name[1] = Ord('i') then
@@ -298,9 +301,6 @@ begin
     if not WriteProcessMemory(FProcess.hProcess, Test, @x, 1, w) then
       raise Exception.CreateFmt('Fixing PE header antidump failed! Code: %d', [GetLastError]);
   end;
-
-  FImageBoundary := PImageNTHeaders(Buf)^.OptionalHeader.SizeOfImage + FImageBase;
-  Log(ltInfo, Format('Image boundary: %p', [Pointer(FImageBoundary)]));
 
   if string(AnsiString(PAnsiChar(@Sect[0].Name))) = '.text' then
   begin
@@ -314,9 +314,9 @@ begin
     SetBreakpoint(UIntPtr(CloseHandleAPI), hwExecute);
   end;
 
-  if PImageNTHeaders(Buf).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size > 0 then
+  if NT^.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size > 0 then
   begin
-    with PImageNTHeaders(Buf).OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS] do
+    with NT^.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS] do
       if RPM(FImageBase + VirtualAddress, @TLSDir, Min(Size, SizeOf(TLSDir))) then
       begin
         // NOTE: This is an MSVC-ism, where we assume the TLS callback pointers are located right

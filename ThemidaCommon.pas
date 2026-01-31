@@ -26,6 +26,8 @@ type
     FTraceStartSP: NativeUInt;
     FTraceInVM: Boolean;
 
+    procedure InitPEDetails(NT: PImageNTHeaders);
+
     procedure CheckVirtualizedOEP(OEP: NativeUInt);
 
     function DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
@@ -38,12 +40,35 @@ function DisasmCheck(var Dis: TDisasm): Integer;
 
 implementation
 
+{$POINTERMATH ON}
+
 function DisasmCheck(var Dis: TDisasm): Integer;
 begin
   Dis.Archi := SizeOf(Pointer) * 8;
   Result := Disasm(Dis);
   if (Result = UNKNOWN_OPCODE) or (Result = OUT_OF_BLOCK) then
     raise Exception.CreateFmt('Disasm result: %d (EIP = %X)', [Result, Dis.EIP]);
+end;
+
+procedure TTMCommon.InitPEDetails(NT: PImageNTHeaders);
+var
+  Sect: PImageSectionHeader;
+  i: Integer;
+begin
+  Sect := Pointer(PByte(NT) + SizeOf(NT^));
+
+  SetLength(FPESections, NT^.FileHeader.NumberOfSections);
+  for i := 0 to High(FPESections) do
+    FPESections[i] := Sect[i];
+
+  if NT^.OptionalHeader.AddressOfEntryPoint < FPESections[0].VirtualAddress + FPESections[0].Misc.VirtualSize then
+    raise Exception.Create('The selected binary does not seem to be packed (entrypoint is in .text section).');
+
+  FImageBoundary := NT^.OptionalHeader.SizeOfImage + FImageBase;
+  Log(ltInfo, Format('Image boundary: %p', [Pointer(FImageBoundary)]));
+
+  FMajorLinkerVersion := NT^.OptionalHeader.MajorLinkerVersion;
+  Log(ltInfo, Format('Image linker: %d.%d', [FMajorLinkerVersion, NT^.OptionalHeader.MinorLinkerVersion]));
 end;
 
 procedure TTMCommon.CheckVirtualizedOEP(OEP: NativeUInt);
@@ -60,8 +85,6 @@ begin
   FIsVMOEP := True;
   Log(ltInfo, 'OEP is virtualized (!): jmp ' + IntToHex(OEP + 5 + Code.Displ, 8));
 end;
-
-{$POINTERMATH ON}
 
 function TTMCommon.DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
 var
