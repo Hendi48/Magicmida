@@ -18,11 +18,14 @@ type
     cbDataSections: TCheckBox;
     pmSections: TPopupMenu;
     miCreateSectionsNow: TMenuItem;
+    pmRight: TPopupMenu;
+    miCopyLog: TMenuItem;
     procedure btnDumpProcessClick(Sender: TObject);
     procedure btnUnpackClick(Sender: TObject);
     procedure btnShrinkClick(Sender: TObject);
     procedure miCreateSectionsNowClick(Sender: TObject);
     procedure FormCreate(Sender: TObject);
+    procedure miCopyLogClick(Sender: TObject);
   private
     procedure Log(MsgType: TLogMsgType; const Msg: string);
   end;
@@ -31,6 +34,8 @@ var
   ThemidaUnpackerWnd: TThemidaUnpackerWnd;
 
 implementation
+
+uses Clipbrd;
 
 {$R *.dfm}
 
@@ -55,6 +60,21 @@ begin
   if OD.Execute then
   begin
     {$IFDEF CPUX86}TTMDebugger{$ELSE}TTMDebugger64{$ENDIF}.Create(OD.FileName, '', cbDataSections.Checked).FreeOnTerminate := True;
+  end;
+end;
+
+procedure TThemidaUnpackerWnd.miCopyLogClick(Sender: TObject);
+var
+  i: Integer;
+begin
+  with TStringList.Create do
+  begin
+    for i := 0 to LV.Items.Count - 1 do
+      Add(LV.Items[i].Caption);
+
+    Clipboard.AsText := Text;
+
+    Free;
   end;
 end;
 

@@ -33,6 +33,7 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
       item
         AutoSize = True
       end>
+    PopupMenu = pmRight
     SmallImages = ImageList1
     TabOrder = 1
     ViewStyle = vsReport
@@ -236,6 +237,14 @@ object ThemidaUnpackerWnd: TThemidaUnpackerWnd
     object miCreateSectionsNow: TMenuItem
       Caption = 'Create now'
       OnClick = miCreateSectionsNowClick
+    end
+  end
+  object pmRight: TPopupMenu
+    Left = 371
+    Top = 33
+    object miCopyLog: TMenuItem
+      Caption = 'Copy entire log'
+      OnClick = miCopyLogClick
     end
   end
 end
