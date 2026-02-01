@@ -403,11 +403,12 @@ begin
   else if (ExcRecord.ExceptionInformation[0] = 8) and (FTLSTotal > 0) and (FTLSCounter < FTLSTotal) then
   begin
     Inc(FTLSCounter);
-    Log(ltGood, Format('TLS %d: %.8X', [FTLSCounter, UIntPtr(ExcRecord.ExceptionAddress), 8]));
+    Log(ltGood, Format('TLS %d: %.8X', [FTLSCounter, UIntPtr(ExcRecord.ExceptionAddress)]));
     FGuardStart := TMSectR.Address;
     FGuardEnd := FImageBoundary;
     FTMGuard := True;
-    VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_NOACCESS, @OldProt);
+    // Allow R/W, disallow execute. Some weird binaries read a byte at the PE's AddressOfEntrypoint in TLS...
+    VirtualProtectEx(FProcess.hProcess, Pointer(FGuardStart), FGuardEnd - FGuardStart, PAGE_READWRITE, @OldProt);
   end
   else if FTraceMSVCOEP then
   begin
