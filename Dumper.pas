@@ -41,6 +41,7 @@ type
     FForwardsCrypt32: TForwardDict; // Key: DPAPI, Value: crypt32
     FForwardsDbghelp: TForwardDict; // Key: dbgcore, Value: dbghelp
     FForwardsKernelbase: TForwardDict; // Key: NTDLL, Value: kernelbase (Win8 sync APIs like WakeByAddressAll)
+    FForwardsAdvapi32: TForwardDict; // Key: cryptbase, Value: advapi32
     FAllModules: TList<PRemoteModule>;
     FIATImage: PByte;
     FIATImageSize: Cardinal;
@@ -101,6 +102,7 @@ begin
   FForwardsCrypt32 := TForwardDict.Create(16);
   FForwardsDbghelp := TForwardDict.Create(16);
   FForwardsKernelbase := TForwardDict.Create(16);
+  FForwardsAdvapi32 := TForwardDict.Create(16);
   CollectNTFwd;
 end;
 
@@ -115,6 +117,7 @@ begin
   FForwardsCrypt32.Free;
   FForwardsDbghelp.Free;
   FForwardsKernelbase.Free;
+  FForwardsAdvapi32.Free;
 
   if FAllModules <> nil then
   begin
@@ -146,6 +149,7 @@ begin
   if FHUsr <> 0 then
     CollectForwards(FForwardsType2, GetModuleHandle(user32), FHUsr);
   CollectForwards(FForwardsOle32, GetModuleHandle('ole32.dll'), 0);
+  CollectForwards(FForwardsAdvapi32, GetModuleHandle('advapi32.dll'), 0);
 
   hNetapi := LoadLibrary('netapi32.dll');
   hSrvcli := LoadLibrary('srvcli.dll'); // Required for CollectForwards
@@ -346,6 +350,8 @@ begin
       else if FForwardsDbghelp.TryGetValue(a^, Fwd) then
         a^ := Fwd
       else if FForwardsKernelbase.TryGetValue(a^, Fwd) then
+        a^ := Fwd
+      else if FForwardsAdvapi32.TryGetValue(a^, Fwd) then
         a^ := Fwd;
       RangeChecker := a^;
     end;
