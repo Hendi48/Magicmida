@@ -38,12 +38,13 @@ end;
 
 procedure TAntiDumpFixer.RedirectOEP(OEP, IAT: NativeUInt);
 const
-  PUSH_ARGS_RW_PROTECT: array[0..14] of Byte = ($6A, $00, $54, $6A, $04, $68, $00, $04, $00, $00, $68, $00, $00, $40, $00);
-  PUSH_ARGS_OLD_PROTECT: array[0..14] of Byte = ($54, $FF, $74, $24, $04, $68, $00, $04, $00, $00, $68, $00, $00, $40, $00);
+  PUSH_ARGS_RW_PROTECT: array[0..10] of Byte = ($6A, $00, $54, $6A, $04, $68, $00, $04, $00, $00, $68);
+  PUSH_ARGS_OLD_PROTECT: array[0..10] of Byte = ($54, $FF, $74, $24, $04, $68, $00, $04, $00, $00, $68);
 var
   Displ: UInt32;
   NewCode: packed record
     PushArgs1: array[0..High(PUSH_ARGS_RW_PROTECT)] of Byte;
+    PushImgBase1: UInt32;
     CallInstr1: UInt16;
     VirtualProtectAddr1: UInt32;
 
@@ -52,6 +53,7 @@ var
     Entrypoint: UInt32;
 
     PushArgs2: array[0..High(PUSH_ARGS_OLD_PROTECT)] of Byte;
+    PushImgBase2: UInt32;
     CallInstr2: UInt16;
     VirtualProtectAddr2: UInt32;
     PopStack: Byte;
@@ -82,8 +84,9 @@ begin
     Exit;
   end;
 
-  // VirtualProtect($400000, $400, PAGE_READWRITE, OldProtect)
+  // VirtualProtect(ImageBase, $400, PAGE_READWRITE, OldProtect)
   Move(PUSH_ARGS_RW_PROTECT, NewCode.PushArgs1, Length(NewCode.PushArgs1));
+  NewCode.PushImgBase1 := FImageBase;
   NewCode.CallInstr1 := $15FF;
   NewCode.VirtualProtectAddr1 := VProtectIAT;
 
@@ -96,8 +99,9 @@ begin
   end;
   NewCode.OptHdrEntrypoint := FImageBase + LfaNew + $28;
 
-  // VirtualProtect($400000, $400, OldProtect, _)
+  // VirtualProtect(ImageBase, $400, OldProtect, _)
   Move(PUSH_ARGS_OLD_PROTECT, NewCode.PushArgs2, Length(NewCode.PushArgs2));
+  NewCode.PushImgBase2 := FImageBase;
   NewCode.CallInstr2 := $15FF;
   NewCode.VirtualProtectAddr2 := VProtectIAT;
   // pop eax (undo initial "push 0" for OldProtect)
@@ -109,7 +113,7 @@ begin
 
   if WriteProcessMemory(FhProcess, Pointer(OEP), @NewCode, SizeOf(NewCode), NativeUInt(nil^)) then
   begin
-    Log(ltGood, 'Installed VM anti-dump mitigation at OEP');
+    Log(ltGood, 'Installed VM anti-dump (PE header) mitigation at OEP');
     Log(ltInfo, 'NOTE: We assume there is enough space at the entrypoint, which may not be the case in every binary.');
   end
   else
