@@ -42,6 +42,7 @@ type
     FForwardsDbghelp: TForwardDict; // Key: dbgcore, Value: dbghelp
     FForwardsKernelbase: TForwardDict; // Key: NTDLL, Value: kernelbase (Win8 sync APIs like WakeByAddressAll)
     FForwardsAdvapi32: TForwardDict; // Key: cryptbase, Value: advapi32
+    FForwardsSetupapi: TForwardDict; // Key: cfgmgr32, Value: setupapi
     FAllModules: TList<PRemoteModule>;
     FIATImage: PByte;
     FIATImageSize: Cardinal;
@@ -103,6 +104,7 @@ begin
   FForwardsDbghelp := TForwardDict.Create(16);
   FForwardsKernelbase := TForwardDict.Create(16);
   FForwardsAdvapi32 := TForwardDict.Create(16);
+  FForwardsSetupapi := TForwardDict.Create(16);
   CollectNTFwd;
 end;
 
@@ -118,6 +120,7 @@ begin
   FForwardsDbghelp.Free;
   FForwardsKernelbase.Free;
   FForwardsAdvapi32.Free;
+  FForwardsSetupapi.Free;
 
   if FAllModules <> nil then
   begin
@@ -143,7 +146,7 @@ end;
 
 procedure TDumper.CollectNTFwd;
 var
-  hNetapi, hSrvcli, hCrypt32, hDpapi, hDbghelp, hDbgcore: HMODULE;
+  hNetapi, hSrvcli, hCrypt32, hDpapi, hDbghelp, hDbgcore, hSetupapi, hCfgmgr32: HMODULE;
 begin
   CollectForwards(FForwards, GetModuleHandle(kernel32), 0);
   if FHUsr <> 0 then
@@ -171,6 +174,12 @@ begin
   CollectForwards(FForwardsDbghelp, hDbghelp, 0);
   FreeLibrary(hDbghelp);
   FreeLibrary(hDbgcore);
+
+  hSetupapi := LoadLibrary('setupapi.dll');
+  hCfgmgr32 := LoadLibrary('cfgmgr32.dll'); // Required for CollectForwards
+  CollectForwards(FForwardsSetupapi, hSetupapi, 0);
+  FreeLibrary(hSetupapi);
+  FreeLibrary(hCfgmgr32);
 
   if GetModuleHandle('kernelbase.dll') <> 0 then
     CollectForwards(FForwardsKernelbase, GetModuleHandle('kernelbase.dll'), 0);
@@ -352,6 +361,8 @@ begin
       else if FForwardsKernelbase.TryGetValue(a^, Fwd) then
         a^ := Fwd
       else if FForwardsAdvapi32.TryGetValue(a^, Fwd) then
+        a^ := Fwd
+      else if FForwardsSetupapi.TryGetValue(a^, Fwd) then
         a^ := Fwd;
       RangeChecker := a^;
     end;
