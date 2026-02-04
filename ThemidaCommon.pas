@@ -86,6 +86,27 @@ begin
   Log(ltInfo, 'OEP is virtualized (!): jmp ' + IntToHex(OEP + 5 + Code.Displ, 8));
 end;
 
+function FindDelphiCall(CodeDump: PByte; CodeSize: Cardinal): Cardinal;
+var
+  i, Counter: Cardinal;
+begin
+  // Delphi has type metadata at its .text base rather than code.
+  i := 0;
+  Counter := 0;
+  while i < CodeSize - 6 do
+  begin
+    if PWord(CodeDump + i)^ = $25FF then
+    begin
+      Inc(Counter);
+      if Counter = 3 then // Skip the first two for good measure
+        Exit(i);
+    end;
+    Inc(i);
+  end;
+
+  Result := 0;
+end;
+
 function TTMCommon.DetermineIATAddress(OEP: NativeUInt; Dumper: TDumper): NativeUInt;
 var
   TextBase, CodeSize, DataSize: NativeUInt;
@@ -218,6 +239,8 @@ begin
 
     if not FIsVMOEP then
       IATRef := FindCallOrJmpPtr(OEP)
+    else if (PCardinal(@CodeDump[{$IFDEF CPUX86}6{$ELSE}10{$ENDIF}])^ = $6C6F6F42) or (PCardinal(@CodeDump[6])^ = $65747942) then
+      IATRef := FindCallOrJmpPtr(TextBase + FindDelphiCall(CodeDump, CodeSize), True)
     else
       IATRef := FindCallOrJmpPtr(TextBase, True);
 
