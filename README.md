@@ -22,6 +22,11 @@ Old targets from 2007-2009 often don't unpack properly on modern Windows version
 
 Newer versions of Themida detect hardware breakpoints. In order to deal with this, injecting [ScyllaHide](https://github.com/x64dbg/ScyllaHide/releases) is supported. A suitable profile is shipped with Magicmida. You just need to download SycllaHide and put `HookLibraryx86.dll` and `InjectorCLIx86.exe` next to `Magicmida.exe`. Do not overwrite scylla_hide.ini unless you know what you're doing.
 
+If you have ScyllaHide set up but still receive a "Debugger has been found" or "Monitor program found" error, consider the following environmental factors:
+
+* **Windows Security Features:** Modern Windows 10/11 features like Core Isolation (Memory Integrity) and VBS (Virtualization-Based Security) actively prevent ScyllaHide from placing necessary user-mode hooks. You must disable these features and reboot for the anti-anti-debug injection to succeed. 
+* **Leftover AppCompat Shims:** As mentioned above, if a target crashed while Magicmida was attached, Windows may have silently applied compatibility flags that Themida uses to detect debugger presence. Clear the registry keys under `HKCU\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers` for your target.
+
 ## Command line usage
 
 If you'd like to automate unpacking, it's possible to invoke Magicmida as a command line application.
